@@ -3,6 +3,29 @@ const { simpleParser } = require('mailparser');
 const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
 
+// Bekende leveranciers: volledig e-mailadres of domein → leveranciersnaam
+const KNOWN_SENDERS = {
+  'finance@lindenhoff.nl':                          'Lindenhoff',
+  'lindenhoff.nl':                                  'Lindenhoff',
+  'facturen@vleeschatelier.nl':                     'Vleeschatelier',
+  'vleeschatelier.nl':                              'Vleeschatelier',
+  'info@thevanillafamily.com':                      'Vanilla Venture',
+  'administratie@vanillaventure.nl':                'Vanilla Venture',
+  'vanillaventure.nl':                              'Vanilla Venture',
+  'noreply@notifications.order2cash.com':           'Sligro',
+  'info@novitalia.nl':                              'Novitalia',
+  'novitalia.nl':                                   'Novitalia',
+  'info-aspergesamsterdam@deliver.moneybird.com':   'Asperges Amsterdam',
+};
+
+function leverancierFromEmail(address) {
+  if (!address) return '';
+  const lower = address.toLowerCase();
+  if (KNOWN_SENDERS[lower]) return KNOWN_SENDERS[lower];
+  const domain = lower.split('@')[1];
+  return (domain && KNOWN_SENDERS[domain]) || '';
+}
+
 class ImapScanner {
   constructor(settings) {
     this.settings = settings;
@@ -124,10 +147,12 @@ ${text.substring(0, 6000)}`;
 
     for (const email of emails) {
       if (!email.attachments) continue;
+      const senderAddress = email.from?.value?.[0]?.address || '';
+      const leverancier = leverancierFromEmail(senderAddress);
       for (const att of email.attachments) {
         if (!att.contentType || !att.contentType.includes('pdf')) continue;
         const items = await this.parsePdfWithClaude(att.content, att.filename);
-        allItems.push(...items);
+        allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '' })));
       }
     }
 
