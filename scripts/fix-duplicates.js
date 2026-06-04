@@ -11,9 +11,10 @@ const DB_ID = 'b6258a232e6d4482b7b4f50cf449854f';
 function cleanName(naam) {
   let n = (naam || '').toLowerCase().trim();
   // bijv. ", 250gr", ", 1 kg", ", 1.5kg", ", 6x250ml", ", 2 x 5kg"
-  n = n.replace(/,\s*\d[\d.,]*\s*(?:x\s*[\d.,]+\s*)?(?:gr|g|kg|ml|l|ltr|cl|stuks?|st)\b.*/i, '');
+  // (?<!\d) voorkomt dat een decimale komma (zoals in "1,1 kg") wordt gevangen
+  n = n.replace(/(?<!\d),\s*\d[\d.,]*\s*(?:x\s*[\d.,]+\s*)?(?:gr|g|kg|ml|l|ltr|cl|stuks?|st)\b.*/i, '');
   // bijv. ", per kg", ", per stuk"
-  n = n.replace(/,\s*per\s*(?:kg|gr?|ml|l|stuks?|st)\b.*/i, '');
+  n = n.replace(/(?<!\d),\s*per\s*(?:kg|gr?|ml|l|stuks?|st)\b.*/i, '');
   return n.trim();
 }
 
