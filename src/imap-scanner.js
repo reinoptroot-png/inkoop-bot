@@ -31,7 +31,7 @@ class ImapScanner {
     this.settings = settings;
   }
 
-  fetchEmails({ markSeen = true } = {}) {
+  fetchEmails({ markSeen = true, lookbackDays = 7, reprocess = false } = {}) {
     return new Promise((resolve, reject) => {
       const imap = new Imap({
         user: this.settings.imapUser,
@@ -43,13 +43,17 @@ class ImapScanner {
       });
 
       const emails = [];
+      const since = new Date();
+      since.setDate(since.getDate() - lookbackDays);
+      const criteria = reprocess
+        ? [['SINCE', since]]
+        : [['SINCE', since], 'UNSEEN'];
 
       imap.once('ready', () => {
         imap.openBox('INBOX', false, (err, box) => {
           if (err) return reject(err);
 
-          // Zoek ongelezen mails
-          imap.search(['UNSEEN'], (err, results) => {
+          imap.search(criteria, (err, results) => {
             if (err) return reject(err);
             if (!results || results.length === 0) {
               imap.end();
@@ -141,8 +145,8 @@ ${text.substring(0, 6000)}`;
     }
   }
 
-  async scan({ markSeen = true } = {}) {
-    const emails = await this.fetchEmails({ markSeen });
+  async scan({ markSeen = true, lookbackDays = 7, reprocess = false } = {}) {
+    const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess });
     const allItems = [];
 
     for (const email of emails) {

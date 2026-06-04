@@ -23,7 +23,8 @@ const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass:
 for (const [key, env] of Object.entries(required)) {
   if (!settings[key]) throw new Error(`Ontbrekende instelling "${key}" — stel env var ${env} in of voeg toe aan settings.json`);
 }
-const dryRun = process.argv.includes('--dry-run');
+const dryRun    = process.argv.includes('--dry-run');
+const reprocess = process.argv.includes('--reprocess');
 
 async function run() {
   const start = new Date().toISOString();
@@ -31,14 +32,14 @@ async function run() {
 
   console.log('Verbinding maken met IMAP:', settings.imapUser, '@', settings.imapHost);
   const scanner1 = new ImapScanner(settings);
-  const items1 = await scanner1.scan({ markSeen: !dryRun });
+  const items1 = await scanner1.scan({ markSeen: !dryRun, reprocess });
   console.log('IMAP 1 OK —', items1.length, 'producten');
 
   let items2 = [];
   if (settings.imapUser2 && settings.imapPass2) {
     console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', settings.imapHost);
     const scanner2 = new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 });
-    items2 = await scanner2.scan({ markSeen: !dryRun });
+    items2 = await scanner2.scan({ markSeen: !dryRun, reprocess });
     console.log('IMAP 2 OK —', items2.length, 'producten');
   }
 
