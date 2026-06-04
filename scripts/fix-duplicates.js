@@ -7,15 +7,32 @@ const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'settings
 const notion = new Client({ auth: settings.notionToken });
 const DB_ID = 'b6258a232e6d4482b7b4f50cf449854f';
 
-// Verwijder verpakkingsinfo na komma als het gewicht/volume bevat
+const UNIT = /(?:gr|g|kg|ml|l|ltr|cl|stuks?|st)\b/i;
+const QTY  = /\d[\d.,/]*\s*(?:x\s*[\d.,]+\s*)?/;
+
 function cleanName(naam) {
   let n = (naam || '').toLowerCase().trim();
-  // bijv. ", 250gr", ", 1 kg", ", 1.5kg", ", 6x250ml", ", 2 x 5kg"
-  // (?<!\d) voorkomt dat een decimale komma (zoals in "1,1 kg") wordt gevangen
-  n = n.replace(/(?<!\d),\s*\d[\d.,]*\s*(?:x\s*[\d.,]+\s*)?(?:gr|g|kg|ml|l|ltr|cl|stuks?|st)\b.*/i, '');
-  // bijv. ", per kg", ", per stuk"
+
+  // Verwijder haakjes met inhoud: "(rauw)", "(lang)", "(groot)"
+  n = n.replace(/\s*\([^)]*\)/g, '');
+
+  // Verpakkingsinfo na komma: ", 250gr", ", 1 kg", ", 6x250ml", ", kist 5kg", ", tray 30st"
+  // (?<!\d) slaat decimale komma over (bijv. "1,1 kg")
+  n = n.replace(/(?<!\d),\s*(?:\d+\s+)?(?:kist(?:en)?|bos(?:sen)?|tray|doos|dozen|pak(?:ken)?|zak(?:ken)?|emmer|bak)\b.*/i, '');
+  n = n.replace(new RegExp(`(?<!\\d),\\s*${QTY.source}${UNIT.source}.*`, 'i'), '');
   n = n.replace(/(?<!\d),\s*per\s*(?:kg|gr?|ml|l|stuks?|st)\b.*/i, '');
-  return n.trim();
+
+  // Gewicht/volume na spatie (alles vanaf dat punt): "250gr", "1,1 kg", "5/6 kg", "30st", "1l"
+  n = n.replace(new RegExp(`\\s+${QTY.source}${UNIT.source}.*`, 'i'), '');
+
+  // Niet-betekenisvolle woorden als laatste woord
+  n = n.replace(/\s+(?:tray|bulk|rauw)\s*$/i, '');
+
+  // Niet-betekenisvolle woorden overal
+  n = n.replace(/\b(?:freiland|dagvers[e]?|neutraal)\b/gi, '');
+
+  // Verwijder hangende leestekens/spaties aan het einde
+  return n.replace(/\s+/g, ' ').replace(/[,.\s]+$/, '').trim();
 }
 
 async function fetchAll() {
