@@ -29,13 +29,17 @@ async function run() {
   const start = new Date().toISOString();
   console.log('\n=== Inkoop Bot scan — ' + start + (dryRun ? ' [DRY-RUN]' : '') + ' ===\n');
 
+  console.log('Verbinding maken met IMAP:', settings.imapUser, '@', settings.imapHost);
   const scanner1 = new ImapScanner(settings);
   const items1 = await scanner1.scan({ markSeen: !dryRun });
+  console.log('IMAP 1 OK —', items1.length, 'producten');
 
   let items2 = [];
   if (settings.imapUser2 && settings.imapPass2) {
+    console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', settings.imapHost);
     const scanner2 = new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 });
     items2 = await scanner2.scan({ markSeen: !dryRun });
+    console.log('IMAP 2 OK —', items2.length, 'producten');
   }
 
   // Dedupliceer over beide mailboxen
@@ -85,4 +89,8 @@ async function run() {
   }
 }
 
-run().catch(e => { console.error('\nFout:', e.message); process.exit(1); });
+run().catch(e => {
+  console.error('\nFout:', e.message);
+  console.error(e.stack);
+  process.exit(1);
+});
