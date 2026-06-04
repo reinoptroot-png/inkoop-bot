@@ -70,8 +70,8 @@ ${names.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
 
 class NotionSync {
   constructor(settings) {
-    this.client = new Client({ auth: settings.notionToken.trim() });
-    this.dbId = settings.notionDbId.trim();
+    this.client = new Client({ auth: (settings.notionToken || '').trim() });
+    this.dbId = (settings.notionDbId || '').trim();
     this.historyDbId = '2d313fcc4d2f480c84ee3344a70cbdcb';
     this.anthropicKey = settings.anthropicKey;
   }

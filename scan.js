@@ -7,17 +7,22 @@ const fs = require('fs');
 let _sf = {};
 try { _sf = JSON.parse(fs.readFileSync(path.join(__dirname, 'settings.json'), 'utf8')); } catch {}
 const settings = {
-  imapHost:        process.env.IMAP_HOST        || _sf.imapHost        || 'imap.one.com',
-  imapPort:        process.env.IMAP_PORT        || _sf.imapPort        || '993',
-  imapUser:        process.env.IMAP_USER        || _sf.imapUser,
-  imapPass:        process.env.IMAP_PASS        || _sf.imapPass,
-  imapUser2:       process.env.IMAP_USER2       || _sf.imapUser2,
-  imapPass2:       process.env.IMAP_PASS2       || _sf.imapPass2,
-  notionToken:     process.env.NOTION_TOKEN     || _sf.notionToken,
-  notionDbId:      process.env.NOTION_DB_ID     || _sf.notionDbId,
+  imapHost:        process.env.IMAP_HOST         || _sf.imapHost        || 'imap.one.com',
+  imapPort:        process.env.IMAP_PORT         || _sf.imapPort        || '993',
+  imapUser:        process.env.IMAP_USER         || _sf.imapUser,
+  imapPass:        process.env.IMAP_PASS         || _sf.imapPass,
+  imapUser2:       process.env.IMAP_USER2        || _sf.imapUser2,
+  imapPass2:       process.env.IMAP_PASS2        || _sf.imapPass2,
+  notionToken:     process.env.NOTION_TOKEN      || _sf.notionToken,
+  notionDbId:      process.env.NOTION_DB_ID      || _sf.notionDbId      || 'b6258a232e6d4482b7b4f50cf449854f',
   anthropicKey:    process.env.ANTHROPIC_API_KEY || _sf.anthropicKey,
   alertThreshold:  parseInt(process.env.ALERT_THRESHOLD || '') || _sf.alertThreshold || 10,
 };
+
+const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass: 'IMAP_PASS', anthropicKey: 'ANTHROPIC_API_KEY' };
+for (const [key, env] of Object.entries(required)) {
+  if (!settings[key]) throw new Error(`Ontbrekende instelling "${key}" — stel env var ${env} in of voeg toe aan settings.json`);
+}
 const dryRun = process.argv.includes('--dry-run');
 
 async function run() {
