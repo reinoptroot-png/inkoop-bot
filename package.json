@@ -1,0 +1,19 @@
+{
+  "name": "inkoop-bot",
+  "version": "9.0.0",
+  "description": "Euroworld inkoop prijsmonitor",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "imap": "^0.8.19",
+    "mailparser": "^3.6.5",
+    "pdf-parse": "^1.1.1",
+    "node-fetch": "^2.7.0",
+    "@notionhq/client": "^2.2.15"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0"
+  }
+}

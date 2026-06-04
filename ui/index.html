@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inkoop Bot</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #141414;
+    --surface: #1e1e1e;
+    --surface2: #252525;
+    --border: #2e2e2e;
+    --text: #e8e8e8;
+    --muted: #666;
+    --accent: #c8a96e;
+    --accent-dim: rgba(200, 169, 110, 0.12);
+    --red: #e05c5c;
+    --red-dim: rgba(224, 92, 92, 0.1);
+    --green: #6ab47a;
+    --green-dim: rgba(106, 180, 122, 0.1);
+    --radius: 6px;
+    --font: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    -webkit-app-region: drag;
+  }
+
+  /* Titlebar */
+  .titlebar {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 0 16px 0 80px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .titlebar-title {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .titlebar-badge {
+    margin-left: auto;
+    background: var(--accent-dim);
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+  }
+  .tab {
+    padding: 10px 16px;
+    font-size: 11px;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: color 0.15s;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Content */
+  .content {
+    flex: 1;
+    overflow: hidden;
+    -webkit-app-region: no-drag;
+  }
+  .panel { display: none; height: 100%; overflow-y: auto; padding: 20px; }
+  .panel.active { display: flex; flex-direction: column; gap: 16px; }
+
+  /* Scan bar */
+  .scan-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+  }
+  .scan-info { flex: 1; }
+  .scan-label { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scan-status { font-size: 12px; color: var(--text); margin-top: 3px; }
+
+  button {
+    background: var(--accent);
+    color: #1a1200;
+    border: none;
+    padding: 8px 18px;
+    border-radius: var(--radius);
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+
+  /* Alerts */
+  .section-title {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .alerts-list { display: flex; flex-direction: column; gap: 6px; }
+  .alert-item {
+    background: var(--red-dim);
+    border: 1px solid rgba(224, 92, 92, 0.2);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .alert-item.up .diff { color: var(--red); }
+  .alert-item.down .diff { color: var(--green); }
+  .alert-item.down { background: var(--green-dim); border-color: rgba(106,180,122,0.2); }
+
+  .alert-name { flex: 1; font-size: 12px; }
+  .alert-prices { font-size: 11px; color: var(--muted); }
+  .diff { font-size: 13px; font-weight: 700; min-width: 50px; text-align: right; }
+
+  /* Prices table */
+  .prices-table {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .prices-table table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .prices-table th {
+    background: var(--surface2);
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+  }
+  .prices-table td {
+    padding: 9px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 12px;
+  }
+  .prices-table tr:last-child td { border-bottom: none; }
+  .prices-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .price-val { color: var(--accent); font-weight: 600; }
+  .empty-state {
+    padding: 32px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 12px;
+    max-width: 340px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: all 0.2s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.error { border-color: rgba(224,92,92,0.4); color: var(--red); }
+  .toast.success { border-color: rgba(106,180,122,0.4); color: var(--green); }
+
+  /* Settings form */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field.full { grid-column: 1 / -1; }
+  label {
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
+
+  .settings-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .settings-section-title {
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid rgba(200,169,110,0.3);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <span class="titlebar-title">Inkoop Bot v9</span>
+  <span class="titlebar-badge" id="badge">Euroworld</span>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="dashboard">Dashboard</div>
+  <div class="tab" data-tab="prijzen">Prijslijst</div>
+  <div class="tab" data-tab="instellingen">Instellingen</div>
+</div>
+
+<div class="content">
+
+  <!-- DASHBOARD -->
+  <div class="panel active" id="panel-dashboard">
+    <div class="scan-bar">
+      <div class="scan-info">
+        <div class="scan-label">IMAP Mailbox</div>
+        <div class="scan-status" id="scan-status">Klik op scannen om nieuwe facturen te verwerken</div>
+      </div>
+      <button id="btn-scan">Scan nu</button>
+    </div>
+
+    <div id="alerts-section" style="display:none">
+      <div class="section-title">Prijsalerts</div>
+      <div class="alerts-list" id="alerts-list"></div>
+    </div>
+
+    <div id="no-alerts" class="empty-state" style="display:none">
+      ✓ Geen prijsafwijkingen gevonden
+    </div>
+  </div>
+
+  <!-- PRIJSLIJST -->
+  <div class="panel" id="panel-prijzen">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="section-title" style="margin:0">Notion — Ingrediënten</div>
+      <button class="secondary" id="btn-refresh-prices" style="padding:6px 12px; font-size:10px;">Vernieuwen</button>
+    </div>
+    <div class="prices-table" id="prices-table">
+      <div class="empty-state">Laad de prijslijst om ingrediënten te bekijken</div>
+    </div>
+  </div>
+
+  <!-- INSTELLINGEN -->
+  <div class="panel" id="panel-instellingen">
+
+    <div class="settings-section">
+      <div class="settings-section-title">IMAP — Europizza</div>
+      <div class="settings-grid">
+        <div class="field full">
+          <label>E-mailadres</label>
+          <input type="email" id="imapUser" placeholder="facturen@europizza.rest" />
+        </div>
+        <div class="field full">
+          <label>Wachtwoord</label>
+          <input type="password" id="imapPass" placeholder="••••••••" />
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">IMAP — Europa</div>
+      <div class="settings-grid">
+        <div class="field full">
+          <label>E-mailadres</label>
+          <input type="email" id="imapUser2" placeholder="facturen@europa.rest" />
+        </div>
+        <div class="field full">
+          <label>Wachtwoord</label>
+          <input type="password" id="imapPass2" placeholder="••••••••" />
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">IMAP — Server</div>
+      <div class="settings-grid">
+        <div class="field">
+          <label>Host</label>
+          <input type="text" id="imapHost" placeholder="imap.one.com" />
+        </div>
+        <div class="field">
+          <label>Poort</label>
+          <input type="text" id="imapPort" placeholder="993" />
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Notion</div>
+      <div class="settings-grid">
+        <div class="field full">
+          <label>API Token</label>
+          <input type="password" id="notionToken" placeholder="secret_..." />
+        </div>
+        <div class="field full">
+          <label>Database ID — Ingredienten</label>
+          <input type="text" id="notionDbId" placeholder="143025fb08ca80f6b918f1d43e4f6d91" />
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-section-title">Claude API</div>
+      <div class="settings-grid">
+        <div class="field full">
+          <label>Anthropic API Key</label>
+          <input type="password" id="anthropicKey" placeholder="sk-ant-..." />
+        </div>
+        <div class="field">
+          <label>Alert drempel (%)</label>
+          <input type="number" id="alertThreshold" placeholder="10" min="1" max="100" />
+        </div>
+      </div>
+    </div>
+
+    <button id="btn-save" style="align-self:flex-start">Instellingen opslaan</button>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+      if (tab.dataset.tab === 'prijzen') loadPrices();
+      if (tab.dataset.tab === 'instellingen') loadSettings();
+    });
+  });
+
+  function showToast(msg, type = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    setTimeout(() => t.className = 'toast', 3500);
+  }
+
+  // Settings
+  async function loadSettings() {
+    const s = await window.api.getSettings();
+    ['imapHost','imapPort','imapUser','imapPass','imapUser2','imapPass2','notionToken','notionDbId','anthropicKey','alertThreshold'].forEach(k => {
+      const el = document.getElementById(k);
+      if (el && s[k] !== undefined) el.value = s[k];
+    });
+  }
+
+  document.getElementById('btn-save').addEventListener('click', async () => {
+    const settings = {};
+    ['imapHost','imapPort','imapUser','imapPass','imapUser2','imapPass2','notionToken','notionDbId','anthropicKey','alertThreshold'].forEach(k => {
+      settings[k] = document.getElementById(k).value.trim();
+    });
+    settings.alertThreshold = parseFloat(settings.alertThreshold) || 10;
+    await window.api.saveSettings(settings);
+    showToast('Instellingen opgeslagen', 'success');
+  });
+
+  // Scan
+  document.getElementById('btn-scan').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-scan');
+    const status = document.getElementById('scan-status');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Scannen...';
+    status.textContent = 'Mailbox scannen op nieuwe facturen...';
+    document.getElementById('alerts-section').style.display = 'none';
+    document.getElementById('no-alerts').style.display = 'none';
+
+    const result = await window.api.scanNow();
+    btn.disabled = false;
+    btn.textContent = 'Scan nu';
+
+    if (result.error) {
+      status.textContent = result.error;
+      showToast(result.error, 'error');
+      return;
+    }
+
+    status.textContent = result.message || 'Klaar';
+
+    if (result.alerts && result.alerts.length > 0) {
+      renderAlerts(result.alerts);
+      document.getElementById('alerts-section').style.display = 'block';
+      showToast(`${result.alerts.length} prijsalert(s) gevonden`, 'error');
+    } else {
+      document.getElementById('no-alerts').style.display = 'block';
+      showToast(result.message || 'Klaar', 'success');
+    }
+  });
+
+  function renderAlerts(alerts) {
+    const list = document.getElementById('alerts-list');
+    list.innerHTML = alerts.map(a => {
+      const up = parseFloat(a.diff) > 0;
+      return `
+        <div class="alert-item ${up ? 'up' : 'down'}">
+          <div class="alert-name">${a.ingredient}</div>
+          <div class="alert-prices">€${a.oldPrice?.toFixed(2)} → €${a.newPrice?.toFixed(2)} / ${a.eenheid}</div>
+          <div class="diff">${up ? '+' : ''}${a.diff}%</div>
+        </div>`;
+    }).join('');
+  }
+
+  // Prijslijst
+  async function loadPrices() {
+    const table = document.getElementById('prices-table');
+    table.innerHTML = '<div class="empty-state"><span class="spinner"></span>Laden...</div>';
+    const prices = await window.api.getNotionPrices();
+    if (!prices || prices.length === 0) {
+      table.innerHTML = '<div class="empty-state">Geen prijzen gevonden. Controleer Notion instellingen.</div>';
+      return;
+    }
+    const sorted = prices.sort((a, b) => a.name.localeCompare(b.name));
+    table.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Ingredient</th>
+            <th>Kostprijs</th>
+            <th>Eenheid</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${sorted.map(p => `
+            <tr>
+              <td>${p.name}</td>
+              <td class="price-val">${p.price != null ? '€' + p.price.toFixed(2) : '—'}</td>
+              <td style="color:var(--muted)">${p.eenheid || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  document.getElementById('btn-refresh-prices').addEventListener('click', loadPrices);
+
+  // Init
+  loadSettings();
+</script>
+</body>
+</html>
