@@ -4,51 +4,133 @@ Desktop app voor Euroworld — monitort leveranciersfacturen via IMAP en vergeli
 
 ## Wat het doet
 
-1. Scant de IMAP mailbox op nieuwe e-mails met PDF-bijlagen
-2. Claude leest de factuur en extraheert ingrediënten + prijzen
+1. Scant IMAP mailbox(en) op nieuwe e-mails met PDF-bijlagen
+2. Claude (Anthropic) leest de factuur en extraheert ingrediënten + prijzen
 3. Vergelijkt met de Notion Ingrediënten database
 4. Toont een alert bij prijsafwijkingen boven de drempelwaarde
 5. Werkt Notion automatisch bij met de nieuwe prijs
 
-## Installatie
+---
+
+## Installatie op een nieuwe Mac
 
 ### Vereisten
-- Node.js (https://nodejs.org)
-- Anthropic API key (https://console.anthropic.com)
-- Notion Integration token
 
-### Starten
+- [Node.js 20+](https://nodejs.org) — via website of `brew install node`
+- Git — standaard aanwezig, anders via Xcode Command Line Tools
+
+### Stap 1 — Clone de repository
 
 ```bash
-cd inkoop-bot-v9
+git clone https://github.com/reinoptroot-png/inkoop-bot.git
+cd inkoop-bot
+```
+
+### Stap 2 — Installeer dependencies
+
+```bash
 npm install
+```
+
+### Stap 3 — Configureer inloggegevens
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` en vul de waarden in:
+
+```env
+IMAP_HOST=imap.one.com
+IMAP_PORT=993
+IMAP_USER=facturen@europizza.rest
+IMAP_PASS=jouwwachtwoord
+
+# Optioneel: tweede mailbox
+IMAP_USER2=facturen@europa.rest
+IMAP_PASS2=jouwwachtwoord2
+
+NOTION_TOKEN=ntn_...
+NOTION_DB_ID=b6258a232e6d4482b7b4f50cf449854f
+
+ANTHROPIC_KEY=sk-ant-...
+ALERT_THRESHOLD=10
+```
+
+> **Let op:** `.env` en `settings.json` staan in `.gitignore` en worden nooit gecommit.
+
+### Stap 4 — Starten
+
+**Desktop app (Electron UI):**
+```bash
 npm start
 ```
 
-## Instellingen
+**Headless scan (zonder UI, voor automatisering):**
+```bash
+npm run scan
+```
 
-### IMAP
-- **Host**: imap.one.com
-- **Poort**: 993
-- **E-mail**: facturen@europizza.rest (of facturen@europa.rest)
-- **Wachtwoord**: je one.com wachtwoord
+---
 
-### Notion
-- **API Token**: maak een integration aan via https://www.notion.so/my-integrations
-  - Geef de integration toegang tot de Ingrediënten database
-- **Database ID**: `143025fb08ca80f6b918f1d43e4f6d91`
+## Docker
 
-### Claude API
-- **Anthropic API Key**: je key van console.anthropic.com
-- **Alert drempel**: standaard 10% — bij grotere afwijking verschijnt een alert
+Handig voor automatische scans op een server of via cron.
 
-## Gebruik
+```bash
+# Bouwen
+docker build -t inkoop-bot .
 
-1. Vul de instellingen in en sla op
-2. Klik op **Scan nu** op het Dashboard
-3. De app scant ongelezen mails, verwerkt PDF-bijlagen, en toont alerts
-4. Bekijk de huidige Notion prijslijst onder **Prijslijst**
+# Eénmalig draaien
+docker run --env-file .env inkoop-bot
 
-## Leveranciers
+# Cron — dagelijkse scan om 08:00
+# 0 8 * * * docker run --rm --env-file /pad/naar/.env inkoop-bot
+```
 
-Werkt met alle leveranciers die facturen of pakbonnen als PDF mailen. Shilla Food Group is momenteel de enige leverancier die mailt naar facturen@.
+---
+
+## Instellingen (Electron UI)
+
+Instellingen zijn ook via de app in te vullen. Ze worden opgeslagen in  
+`~/Library/Application Support/inkoop-bot/settings.json` (macOS).
+
+| Veld | Waarde |
+|---|---|
+| IMAP Host | `imap.one.com` |
+| IMAP Poort | `993` |
+| Notion Token | Notion integration token |
+| Notion DB ID | `b6258a232e6d4482b7b4f50cf449854f` |
+| Anthropic Key | Claude API key |
+| Alert drempel | `10` (procent) |
+
+---
+
+## Ondersteunde leveranciers
+
+| Leverancier | E-maildomein |
+|---|---|
+| Lindenhoff | `lindenhoff.nl` |
+| Vleeschatelier | `vleeschatelier.nl` |
+| Vanilla Venture | `vanillaventure.nl` |
+| Sligro | `notifications.order2cash.com` |
+| Novitalia | `novitalia.nl` |
+| Asperges Amsterdam | `deliver.moneybird.com` |
+
+---
+
+## Structuur
+
+```
+src/
+  main.js          — Electron entry point
+  headless.js      — Headless runner (Docker / cron / .env)
+  imap-scanner.js  — IMAP verbinding + PDF parsing
+  notion-sync.js   — Notion lezen en schrijven
+  store.js         — Instellingen opslag (Electron userData)
+  preload.js       — Electron preload bridge
+scripts/
+  batch-classify.js
+  fix-duplicates.js
+ui/                — Electron frontend HTML/CSS/JS
+```

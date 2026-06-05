@@ -1,8 +1,9 @@
 node_modules/
+.env
 settings.json
 scan-log.txt
 *.log
-.DS_Store
-.env
-dist/
-out/
+ui/
+scripts/
+.git/
+.github/
