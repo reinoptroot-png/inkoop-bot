@@ -121,6 +121,13 @@ Naam-veld wordt autocomplete op Notion Recipes database. Prijs automatisch berek
 - Key: NEXT_PUBLIC_SUPABASE_ANON_KEY (in Vercel env vars)
 - Tabellen: `menu_status` (dish_id, dish_name, status, updated_by, updated_at), `price_overrides` (dish_id, dish_name, selling_price, updated_by, updated_at)
 
+### Naamscherm bij opstarten (pages/_app.js)
+- Toont bij eerste bezoek een scherm met alleen "Naam:" input + "Doorgaan →" knop
+- Naam wordt opgeslagen in `ep-me` (localStorage) met `nameSet: true` flag
+- Geldt voor alle tabbladen via `_app.js` wrapper
+- Na invullen direct door naar de gevraagde pagina, geen redirect
+- Fase 6: combineren met laadanimatie
+
 ### Multi-user realtime samenwerking
 Drie features via Supabase Realtime:
 
