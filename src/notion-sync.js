@@ -65,7 +65,16 @@ ${names.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
   const data = await response.json();
   if (data.error) throw new Error(data.error.message);
   const raw = (data.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-  return JSON.parse(raw);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`classifyBatch: JSON.parse mislukt — ${e.message}. Response: ${raw.substring(0, 200)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`classifyBatch: verwacht array, kreeg ${typeof parsed}`);
+  }
+  return parsed;
 }
 
 class NotionSync {

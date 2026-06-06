@@ -171,9 +171,34 @@ ${text.substring(0, 6000)}`;
       }
       const raw = data.content?.[0]?.text || '';
       const clean = raw.replace(/```json|```/g, '').trim();
-      const items = JSON.parse(clean);
-      log(`[pdf] Claude extraheerde ${items.length} producten uit "${filename}"`);
-      return items;
+      let items;
+      try {
+        items = JSON.parse(clean);
+      } catch (parseErr) {
+        console.error(`[pdf] JSON parse mislukt voor "${filename}": ${parseErr.message}`);
+        console.error(`[pdf] Claude response was: ${clean.substring(0, 200)}`);
+        return [];
+      }
+      if (!Array.isArray(items)) {
+        console.error(`[pdf] Claude gaf geen array terug voor "${filename}": ${typeof items}`);
+        return [];
+      }
+      const valid = items.filter(item => {
+        if (!item.ingredient || typeof item.ingredient !== 'string') {
+          console.warn(`[pdf] Item zonder ingredient naam overgeslagen:`, JSON.stringify(item));
+          return false;
+        }
+        if (item.price == null || typeof item.price !== 'number' || isNaN(item.price)) {
+          console.warn(`[pdf] "${item.ingredient}" overgeslagen — ongeldige prijs:`, item.price);
+          return false;
+        }
+        return true;
+      });
+      if (valid.length < items.length) {
+        console.warn(`[pdf] ${items.length - valid.length} items overgeslagen wegens ontbrekende velden in "${filename}"`);
+      }
+      log(`[pdf] Claude extraheerde ${valid.length} geldige producten uit "${filename}" (${items.length} totaal)`);
+      return valid;
     } catch (e) {
       console.error(`[pdf] Claude parse error (${filename}):`, e.message);
       return [];
