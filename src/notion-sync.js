@@ -18,6 +18,16 @@ function nameSimilarity(a, b) {
   return 1 - levenshtein(na, nb) / maxLen;
 }
 
+// Token-Jaccard: beter voor dedup op langere namen met gewicht/verpakking in de naam
+function tokenJaccard(a, b) {
+  const tokens = s => new Set(s.toLowerCase().trim().split(/[\s,.()\-\/]+/).filter(t => t.length > 1));
+  const ta = tokens(a), tb = tokens(b);
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = new Set([...ta, ...tb]).size;
+  return union === 0 ? 1 : inter / union;
+}
+
 function findFuzzyMatch(naam, existing, threshold = 0.80) {
   let best = null, bestScore = 0;
   for (const e of existing) {
@@ -29,6 +39,27 @@ function findFuzzyMatch(naam, existing, threshold = 0.80) {
     }
   }
   return bestScore >= threshold ? { match: best, score: bestScore } : null;
+}
+
+// Dedup-check: >90% token-Jaccard + zelfde leverancier + zelfde prijs (±1%)
+// Geeft de bestaande match terug als het een duidelijke duplicaat is.
+function findDedupMatch(naam, price, leverancier, existing) {
+  const THRESHOLD = 0.90;
+  let best = null, bestScore = 0;
+  for (const e of existing) {
+    const score = Math.max(tokenJaccard(naam, e.name), nameSimilarity(naam, e.name));
+    if (score < THRESHOLD) continue;
+
+    const levGelijk = (leverancier || '').toLowerCase().trim() === (e.leverancier || '').toLowerCase().trim();
+    const prijsGelijk = e.price !== null && price !== null
+      && Math.abs(e.price - price) / Math.max(e.price, price, 0.01) < 0.01;
+
+    if (levGelijk && prijsGelijk && score > bestScore) {
+      bestScore = score;
+      best = e;
+    }
+  }
+  return best ? { match: best, score: bestScore } : null;
 }
 
 // --- Claude Haiku classificatie ---
@@ -205,7 +236,22 @@ class NotionSync {
         continue;
       }
 
-      // 2. Fuzzy match (>80%)
+      // 2. Dedup-check (>90% naam + zelfde leverancier + zelfde prijs → alias, geen nieuw ingredient)
+      const dedup = findDedupMatch(naam, item.price, item.leverancier, existing);
+      if (dedup) {
+        const pct = Math.round(dedup.score * 100);
+        if (dryRun) {
+          console.log(`  [DEDUP]   "${naam}" → "${dedup.match.name}" (${pct}% match, zelfde lev+prijs) — alias toegevoegd`);
+        } else {
+          await this.addAlias(dedup.match.pageId, dedup.match.aliassen, naam);
+          nameMap[naam] = dedup.match;
+          console.log(`  [DEDUP] "${naam}" → alias op "${dedup.match.name}" (${pct}%)`);
+        }
+        results.aliasAdded++;
+        continue;
+      }
+
+      // 3. Fuzzy match (>80%) — alias + prijs bijwerken
       const fuzzy = findFuzzyMatch(naam, existing);
       if (fuzzy) {
         const pct = Math.round(fuzzy.score * 100);
@@ -214,14 +260,13 @@ class NotionSync {
         } else {
           await this.addAlias(fuzzy.match.pageId, fuzzy.match.aliassen, naam);
           await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier);
-          // Voeg toe aan nameMap zodat volgende items uit zelfde scan dit ook vinden
           nameMap[naam] = fuzzy.match;
         }
         results.aliasAdded++;
         continue;
       }
 
-      // 3. Nieuw product
+      // 4. Nieuw product
       toCreate.push(item);
     }
 

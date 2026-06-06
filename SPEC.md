@@ -207,33 +207,27 @@ create table alias_suggestions (
 
 ---
 
-### 3b — Automatische deduplicatie bij import (PRIORITEIT)
+### 3b — Automatische deduplicatie bij import ✅ GEBOUWD
 
 #### Probleem
 De inkoop bot maakt bij elke scan een nieuw ingredient aan als de naam net iets afwijkt (bijv. gewicht of leveranciersnaam in de naam). Zo ontstaan stille dubbelen zoals "buffel mozzarella campa, 250gr" naast "buffel mozzarella campa" — zelfde product, zelfde prijs, zelfde leverancier.
 
-#### Gewenst gedrag
-Wanneer de bot een nieuw product wil aanmaken, controleert hij eerst:
-1. Is er al een ingredient met **>90% naamovereenkomst** (Jaro-Winkler of token-overlap)?
-2. Is de **leverancier identiek**?
-3. Is de **prijs gelijk** (binnen 1% marge)?
-
-Als alle drie kloppen → **geen nieuw ingredient aanmaken**. In plaats daarvan:
-- De scan-naam toevoegen als alias op het bestaande ingredient (komma-gescheiden in het Aliassen-veld)
-- Loggen: `[DEDUP] "scan naam" → alias toegevoegd aan "bestaand ingredient"`
-
-Als alleen naam matcht maar prijs/leverancier verschilt → behandelen als 3a (alias-suggestie, niet automatisch).
+#### Gedrag (geïmplementeerd in `src/notion-sync.js`)
+Wanneer de bot een nieuw product wil aanmaken, doorloopt `syncAll()` vier stappen:
+1. **Exacte match** (naam of bestaande alias) → prijs bijwerken
+2. **Dedup-check** (`findDedupMatch`): >90% naamovereenkomst (max van token-Jaccard en Levenshtein-ratio) + zelfde leverancier + zelfde prijs (±1%) → scan-naam als alias toevoegen, **geen prijs-update**, `[DEDUP]` log
+3. **Fuzzy match** (>80%, `findFuzzyMatch`) → alias toevoegen + prijs bijwerken
+4. **Nieuw product** → Claude Haiku classificeert, daarna aanmaken
 
 #### Grens: wanneer WEL een nieuw ingredient
 - Match <90% op naam
-- Zelfde naam maar andere leverancier én andere prijs (echt ander product)
+- Zelfde naam maar andere leverancier of andere prijs (echt ander product of andere verpakking)
 - Geen enkel actief ingredient in de database
 
-#### Te bouwen
-- `notion-sync.js` `findOrCreate()`: dedup-check voor `createIngredient()`
-- Jaro-Winkler of token-Jaccard implementatie (geen externe dependency)
-- Alias-append logica: bestaand Aliassen-veld uitlezen, nieuwe naam toevoegen, terug schrijven
-- Logging naar console met `[DEDUP]` prefix
+#### Implementatie
+- `tokenJaccard(a, b)`: token-overlap op spatie/komma-gesplitste namen (geen externe dependency)
+- `findDedupMatch(naam, price, leverancier, existing)`: combineert Jaccard + Levenshtein, checkt lev+prijs
+- Log-prefix: `[DEDUP]` zichtbaar in console én scan-log
 
 ---
 
