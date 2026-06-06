@@ -19,14 +19,17 @@ Volgorde in topbar: Calculator / Menu / Inkoop monitor / Recepten
 - Onderaan inklapbare **Archief** sectie (grijs, italic)
 - Geen ··· knoppen, geen kanban knop
 - Status opgeslagen in Supabase `menu_status` tabel, realtime sync tussen gebruikers
+- ✅ **Directe selectie nieuw gerecht**: als de Calculator wordt geopend via `/?gerecht={id}` (bijv. na aanmaken vanuit Menu), wordt het gerecht met dat ID direct geselecteerd in de sidebar — niet het eerste in de lijst. `router.query.gerecht` wordt uitgelezen in `fetchPlates()` én via een `useEffect` op `router.isReady` als fallback voor Next.js hydration timing.
 
 ### Detail view (rechts)
 - Gerechtnaam + Notion link linksboven
 - Status badge naast naam (Huidig menu / Binnenkort / Archief) — klikbaar dropdown
 - Verkoopprijs rechtsboven aanpasbaar — klik "aanpassen", typ nieuw bedrag, Enter = opslaan. Schrijft terug naar Notion via /api/update-vk. Supabase price_overrides voor realtime sync.
+- ✅ **VK sync Menu ↔ Calculator**: verkoopprijs is consistent tussen beide pagina's. Realtime Supabase updates schrijven ook naar `localStorage('ep-vk-overrides')` zodat de prijs na een page refresh behouden blijft. Zowel `index.js` als `menu.js` gebruiken dezelfde bron.
 - 4 metric kaarten: VK excl. BTW / Foodcost / FC % / Brutowinst
 - Ingrediënten tabel met kolommen: Ingrediënt / Eenheid / Hoeveelheid / Yield % / Bruto / Prijs (€/kg of €/st) / Kostprijs / ×
 - Autocomplete bij ingrediënt invullen: fuzzy match op Inkoop Prijzen database, toont leverancier + prijs in dropdown, yield automatisch ingevuld
+- ✅ **Leverancier in snelle onboarding**: mini-formulier bij "nieuw ingredient" heeft een leverancier-veld (naast naam, prijs, eenheid, yield). Wordt opgeslagen via `/api/nieuw-ingredient` naar Notion Inkoop Prijzen.
 - Eigen ingrediënten toevoegen zonder match werkt ook (prijs blijft leeg)
 - Donut chart prijsopbouw (Foodcost / BTW 9% / Personeel 35% / Overige kosten 15% / Brutowinst) en kostensamenvatting naast elkaar onderaan
 - Sync → Notion knop
@@ -274,6 +277,18 @@ Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot
 
 ---
 
+## Database opschoning — 2026-06-06 ✅ VOLTOOID
+
+Uitgevoerd op Notion Inkoop Prijzen database (`b6258a232e6d4482b7b4f50cf449854f`):
+
+- **12 non-food/schoonmaakartikelen gearchiveerd** — handschoenen, vaatwasmiddel, poetsrol, reiniger, vacuumzak, handzeep, oven grill reiniger, schuurspons, pb dikke bleek, yoni dispenser, dr. schnell perojet, sfg stalen tussenschot
+- **31 dranken geflagd** (`isDrank: true`) — coca-cola varianten, rc ginger beer, alpro, fust bier, appelsap, wijn, champagne, koffiebonen, bier varianten
+- **17 near-duplicaten gearchiveerd** — samengevoed met master-ingredient + scan-naam als alias toegevoegd. Bio vs niet-bio nooit samengevoegd.
+- **Controleregels**: `coca-cola → coca-cola zero` (ander product) en `witte wijn azijn → rode wijn azijn` (ander product) bewust NIET samengevoegd.
+- Verificatiescript: `scripts/cleanup-2026-06-06.js`
+
+---
+
 ## Wat NIET doen
 - Geen Sligro data tonen
 - Geen localStorage voor menu-status (gebruik Supabase)
@@ -362,7 +377,14 @@ Lijst van ingrediënten als rijen. Klik op rij → detail uitklapt inline.
 - Leverancier
 - Prijs per kg/st
 - Yield %
+- ✅ **Bijgewerkt datum** — `laatste_update` uit Notion, geformatteerd als "dd mmm" (bijv. "5 jun"). Vaste breedte, rechts uitgelijnd.
 - Chevron ›
+
+### Kolomverdeling ✅
+Grid: `minmax(0,2fr) minmax(0,2.5fr) 72px 52px 76px`
+- Ingredient: 2fr (smaller)
+- Leverancier: 2.5fr (meer ruimte)
+- Prijs / Yield / Bijgewerkt: vaste breedte, rechts uitgelijnd
 
 ### Detail (expanded)
 Drie secties:
