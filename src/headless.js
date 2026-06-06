@@ -59,7 +59,11 @@ async function run() {
         alerts.push({ ingredient: item.ingredient, oldPrice: existing.price, newPrice: item.price, diff: diff.toFixed(1) });
       }
     }
-    await notion.updatePrice({ ...item, pageId: existing?.pageId, isNew: !existing });
+    if (existing) {
+      await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier);
+    } else {
+      await notion.createProduct(item);
+    }
   }
 
   if (alerts.length) {
