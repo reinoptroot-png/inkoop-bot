@@ -39,7 +39,7 @@ async function classifyBatch(products, anthropicKey) {
 Geef voor elk product:
 - original: exact de ingevoerde naam
 - simple_name: korte Nederlandse naam, lowercase (bijv "tomaat", "kippendij", "parmezaan reggiano")
-- is_drank: true als het een drank/drankverwant product is (water, wijn, bier, frisdrank, sap, koffie, thee, etc), anders false
+- is_drank: true als het een drank/drankverwant product is (water, wijn, bier, frisdrank, sap, koffie, thee, etc), anders false. UITZONDERING: producten die "azijn" bevatten (wijnazijn, champagne azijn, balsamico azijn, etc.) zijn altijd is_drank: false, categorie: droogwaren.
 - categorie: één van: zuivel | vlees | vis | groenten | droogwaren | drank
 
 Retourneer ALLEEN een JSON array, geen markdown, geen uitleg.
