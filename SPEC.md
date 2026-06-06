@@ -121,6 +121,25 @@ Naam-veld wordt autocomplete op Notion Recipes database. Prijs automatisch berek
 - Key: NEXT_PUBLIC_SUPABASE_ANON_KEY (in Vercel env vars)
 - Tabellen: `menu_status` (dish_id, dish_name, status, updated_by, updated_at), `price_overrides` (dish_id, dish_name, selling_price, updated_by, updated_at)
 
+### Multi-user realtime samenwerking
+Drie features via Supabase Realtime:
+
+**1. Presence indicators**
+- Channel: `calc-presence` (Supabase Presence)
+- Elke browser krijgt een stabiele userId + naam + kleur (opgeslagen in localStorage als `ep-me`)
+- Presence-state wordt bijgewerkt bij elke gerecht-wissel (track met `plateId`)
+- SidebarItem toont gekleurde initialen-avatars van andere gebruikers die hetzelfde gerecht open hebben
+
+**2. Co-edit melding**
+- Als twee gebruikers tegelijk hetzelfde gerecht openen: blauwe melding boven de ingrediënten tabel: "X is ook in dit gerecht"
+- Melding verdwijnt automatisch als de andere gebruiker navigeert
+
+**3. Realtime wijzigingen**
+- Broadcast events `layer` en `prijzen` op `calc-presence` channel
+- Elke `saveLayer()` / `savePrijzen()` stuurt een broadcast naar andere gebruikers
+- Ontvangen wijzigingen worden direct in de state gezet — geen page refresh nodig
+- Eigen broadcasts worden genegeerd (userId check)
+
 ### Notion databases
 - Europizza gerechten: 9d9f404d-3072-4857-a3be-860d52355727
 - Inkoop Prijzen: b6258a232e6d4482b7b4f50cf449854f
