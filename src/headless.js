@@ -16,6 +16,8 @@ const settings = {
   imapPass:       process.env.IMAP_PASS,
   imapUser2:      process.env.IMAP_USER2,
   imapPass2:      process.env.IMAP_PASS2,
+  imapUser3:      process.env.IMAP_USER3,   // rein@europa.rest — Lightspeed dagrapporten
+  imapPass3:      process.env.IMAP_PASS3,
   notionToken:    process.env.NOTION_TOKEN,
   notionDbId:     process.env.NOTION_DB_ID,
   anthropicKey:   process.env.ANTHROPIC_KEY,
@@ -42,6 +44,8 @@ async function run() {
     scanPromises.push(new ImapScanner({ ...settings }).scan(scanOpts));
   if (settings.imapUser2 && settings.imapPass2)
     scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 }).scan(scanOpts));
+  if (settings.imapUser3 && settings.imapPass3)
+    scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser3, imapPass: settings.imapPass3 }).scan(scanOpts));
 
   const results = (await Promise.all(scanPromises)).flat();
   console.log(`[inkoop-bot] ${results.length} items gescand`);
