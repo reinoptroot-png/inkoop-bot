@@ -87,6 +87,33 @@ Placeholder pagina. Uitleg + roadmap items. Binnenkort badge in navigatie.
 
 ---
 
+## Fase 5 — Recept-rijen in Calculator
+
+### Wat
+Naast `+ ingrediënt` en `+ bonus` staat een `+ recept` knop in de ingrediënten tabel van de Calculator.
+
+### Recept-rij velden
+- **Naam** — vrij in te typen (later te koppelen aan Recipes database)
+- **Eenheid** — gram of stuks (dropdown)
+- **Hoeveelheid** — getal
+- **Prijs per eenheid** — €/kg of €/st, handmatig in te vullen
+
+### FC% berekening
+Recept-rijen tellen volledig mee in de foodcost berekening via de bestaande `ingFC()` functie.
+
+### Visueel onderscheid
+- Achtergrond: `#f7f6fd` (lichtpaars)
+- Badge "recept · fase 5" in paars (`#7c6db5`, achtergrond `#eeebfb`)
+- Knop `+ recept`: paarse tekst en rand (`color: #7c6db5, borderColor: #c4b8e8`)
+
+### Datamodel
+`isRecept: true` vlag op het extra-rij object in `layer[plateId].extra[]`, zelfde structuur als bestaande extra-rijen en bonus-rijen.
+
+### Fase 5 — koppeling Recipes database (later)
+Naam-veld wordt autocomplete op Notion Recipes database. Prijs automatisch berekend op basis van recept-ingrediënten.
+
+---
+
 ## Technische details
 
 ### Supabase
