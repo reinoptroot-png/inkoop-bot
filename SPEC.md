@@ -207,7 +207,37 @@ create table alias_suggestions (
 
 ---
 
-### 3b — Scan conflict melding (PRIORITEIT)
+### 3b — Automatische deduplicatie bij import (PRIORITEIT)
+
+#### Probleem
+De inkoop bot maakt bij elke scan een nieuw ingredient aan als de naam net iets afwijkt (bijv. gewicht of leveranciersnaam in de naam). Zo ontstaan stille dubbelen zoals "buffel mozzarella campa, 250gr" naast "buffel mozzarella campa" — zelfde product, zelfde prijs, zelfde leverancier.
+
+#### Gewenst gedrag
+Wanneer de bot een nieuw product wil aanmaken, controleert hij eerst:
+1. Is er al een ingredient met **>90% naamovereenkomst** (Jaro-Winkler of token-overlap)?
+2. Is de **leverancier identiek**?
+3. Is de **prijs gelijk** (binnen 1% marge)?
+
+Als alle drie kloppen → **geen nieuw ingredient aanmaken**. In plaats daarvan:
+- De scan-naam toevoegen als alias op het bestaande ingredient (komma-gescheiden in het Aliassen-veld)
+- Loggen: `[DEDUP] "scan naam" → alias toegevoegd aan "bestaand ingredient"`
+
+Als alleen naam matcht maar prijs/leverancier verschilt → behandelen als 3a (alias-suggestie, niet automatisch).
+
+#### Grens: wanneer WEL een nieuw ingredient
+- Match <90% op naam
+- Zelfde naam maar andere leverancier én andere prijs (echt ander product)
+- Geen enkel actief ingredient in de database
+
+#### Te bouwen
+- `notion-sync.js` `findOrCreate()`: dedup-check voor `createIngredient()`
+- Jaro-Winkler of token-Jaccard implementatie (geen externe dependency)
+- Alias-append logica: bestaand Aliassen-veld uitlezen, nieuwe naam toevoegen, terug schrijven
+- Logging naar console met `[DEDUP]` prefix
+
+---
+
+### 3c — Scan conflict melding (PRIORITEIT)
 
 #### Probleem
 Als twee scans tegelijk lopen (bijv. na `--rescan`) of als een scan een ingredient bijwerkt dat net handmatig is aangepast, overschrijft de bot stilletjes de handmatige waarde.
@@ -365,3 +395,80 @@ Vier kaartjes altijd zichtbaar:
 - Scanner update alleen: Kostprijs, Leverancier, Laatste update
 - Handmatige velden: Yield, Aliassen, Inkoopeenheid, Alternatieve leverancier
 
+
+---
+
+## Fase 6 — Gebruikershandleiding in Notion
+
+### Doel
+Een volledige handleiding geschreven in Notion, zodat het keukenteam en nieuwe medewerkers zelfstandig met de app kunnen werken. De handleiding legt uit hoe elk onderdeel werkt, wat de relatie is met Notion, en hoe de inkoop bot op de achtergrond functioneert.
+
+### Locatie
+Aparte Notion pagina onder de Europizza workspace: **"Handleiding — Europizza App"**
+
+---
+
+### Inhoud per sectie
+
+#### 1. Introductie
+- Wat is de app en waarvoor gebruik je hem
+- Welke drie systemen samenwerken: de webapp (Vercel), Notion (database), en de inkoop bot (scanner)
+- Wie gebruikt wat: keukenteam → Calculator + Menu; inkoop → Ingrediënten + Inkoop monitor; automatisch → inkoop bot
+
+#### 2. Calculator
+- Hoe open je een gerecht
+- Hoe werkt de verkoopprijs aanpassen
+- Wat betekent foodcost % en wanneer is het te hoog
+- Hoe voeg je een ingrediënt toe (autocomplete uitgelegd)
+- Verschil tussen ingrediënt / bonus / recept rij
+- Wat doet de "Sync → Notion" knop (automatisch na 3 seconden)
+- Wat betekent de groene vinkje / spinner in de topbar
+
+#### 3. Menu pagina
+- Hoe verander je de status van een gerecht (Huidig menu / Binnenkort / Archief)
+- Hoe lees je de FC% kleuren (groen / oranje / rood)
+- Wat is de Archief sectie
+
+#### 4. Inkoop monitor
+- Wat zijn prijsalerts (>5% wijziging)
+- Hoe lees je het staafdiagram "Gerechten onder druk"
+- Hoe gebruik je de Prijzen & leveranciers tab
+- Welke leveranciers worden gefilterd (Sligro dranken, BLACKLIST)
+
+#### 5. Ingrediënten editor
+- Hoe zoek je een ingredient op
+- Hoe pas je yield, prijs, aliassen aan
+- Wat is een alias en waarom is het belangrijk (matching met facturen)
+- Wat is inkoopeenheid vs receptuureenheid
+- Hoe verwijder je een ingredient (bevestigingsdialoog)
+- Wat betekent de "Ontbrekende prijzen" observatie bovenaan
+
+#### 6. Inkoop bot — hoe werkt het op de achtergrond
+- Bot scant dagelijks de mailboxen (facturen@europizza.rest, facturen@europa.rest, rein@europa.rest)
+- Herkent PDF-bijlagen van bekende leveranciers
+- Claude analyseert de factuur en extraheert producten + prijzen
+- Prijzen worden bijgewerkt in de Notion Inkoop Prijzen database
+- Prijshistorie wordt bijgehouden (Inkoop Geschiedenis database)
+- Alerts worden gegenereerd bij afwijkingen >10%
+- Wanneer draait de bot: handmatig via `node src/headless.js`, of `--rescan` voor gelezen mails
+
+#### 7. Multi-user samenwerking
+- Naamscherm bij eerste bezoek: vul je naam in zodat collega's je zien
+- Presence indicators: initialen in de sidebar tonen wie welk gerecht open heeft
+- Co-edit melding: als twee mensen hetzelfde gerecht openen
+- Wijzigingen van collega's verschijnen direct (geen refresh nodig)
+
+#### 8. Veel gestelde vragen
+- "Mijn foodcost % klopt niet" → controleer of alle ingrediënten een prijs hebben (gele waarschuwing)
+- "Een ingredient staat dubbel" → gebruik aliassen om duplicaten samen te voegen
+- "De bot heeft de verkeerde prijs opgeslagen" → pas handmatig aan via Ingrediënten editor, wordt niet overschreven
+- "Ik zie een alias suggestie" → bevestig of weiger via de melding (Fase 3)
+
+---
+
+### Te bouwen (Fase 6)
+- Notion pagina aanmaken met bovenstaande structuur
+- Elke sectie als aparte sub-pagina met uitklapbare blokken
+- Screenshots van elke pagina toevoegen
+- Naamscherm combineren met laadanimatie (zie SPEC naamscherm sectie)
+- Link naar handleiding toevoegen in de app (? icoon of "Help" in de topbar)
