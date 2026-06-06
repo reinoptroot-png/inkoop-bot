@@ -31,7 +31,7 @@ class ImapScanner {
     this.settings = settings;
   }
 
-  fetchEmails({ markSeen = true, lookbackDays = 7, reprocess = false } = {}) {
+  fetchEmails({ markSeen = true, lookbackDays = 7, reprocess = false, debug = false } = {}) {
     return new Promise((resolve, reject) => {
       const imap = new Imap({
         user: this.settings.imapUser,
@@ -50,11 +50,14 @@ class ImapScanner {
         : [['SINCE', since], 'UNSEEN'];
 
       imap.once('ready', () => {
+        if (debug) console.log(`[imap] Verbinding OK — ${this.settings.imapUser}`);
         imap.openBox('INBOX', false, (err, box) => {
           if (err) return reject(err);
+          if (debug) console.log(`[imap] Inbox geopend — ${box.messages.total} emails totaal`);
 
           imap.search(criteria, (err, results) => {
             if (err) return reject(err);
+            if (debug) console.log(`[imap] Zoekopdracht leverde ${results ? results.length : 0} emails op`);
             if (!results || results.length === 0) {
               imap.end();
               return resolve([]);
@@ -84,7 +87,10 @@ class ImapScanner {
         });
       });
 
-      imap.once('error', reject);
+      imap.once('error', (err) => {
+        if (debug) console.log(`[imap] Verbinding MISLUKT — ${this.settings.imapUser}: ${err.message}`);
+        reject(err);
+      });
       imap.connect();
     });
   }
@@ -145,16 +151,23 @@ ${text.substring(0, 6000)}`;
     }
   }
 
-  async scan({ markSeen = true, lookbackDays = 7, reprocess = false } = {}) {
-    const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess });
+  async scan({ markSeen = true, lookbackDays = 7, reprocess = false, debug = false } = {}) {
+    const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
     const allItems = [];
 
     for (const email of emails) {
-      if (!email.attachments) continue;
-      const senderAddress = email.from?.value?.[0]?.address || '';
+      const subject = email.subject || '(geen onderwerp)';
+      const senderAddress = email.from?.value?.[0]?.address || '(onbekend)';
+      if (!email.attachments || email.attachments.length === 0) {
+        if (debug) console.log(`[imap] Overgeslagen — geen bijlagen: "${subject}" van ${senderAddress}`);
+        continue;
+      }
       const leverancier = leverancierFromEmail(senderAddress);
       for (const att of email.attachments) {
-        if (!att.contentType || !att.contentType.includes('pdf')) continue;
+        if (!att.contentType || !att.contentType.includes('pdf')) {
+          if (debug) console.log(`[imap] Overgeslagen — geen PDF (${att.contentType || 'onbekend type'}): bijlage "${att.filename}" in "${subject}"`);
+          continue;
+        }
         const items = await this.parsePdfWithClaude(att.content, att.filename);
         allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '' })));
       }

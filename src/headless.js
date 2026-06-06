@@ -25,9 +25,10 @@ const settings = {
 };
 
 const rescan = process.argv.includes('--rescan');
+const debug  = process.argv.includes('--all');
 const scanOpts = rescan
-  ? { reprocess: true, lookbackDays: 7, markSeen: false }
-  : {};
+  ? { reprocess: true, lookbackDays: 7, markSeen: false, debug }
+  : { debug };
 
 async function run() {
   const missing = ['imapUser', 'imapPass', 'notionToken', 'notionDbId', 'anthropicKey']
