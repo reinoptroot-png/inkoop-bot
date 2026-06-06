@@ -93,7 +93,7 @@ class NotionSync {
           eenheid: props['Eenheid']?.rich_text?.[0]?.plain_text || 'kg',
           leverancier: props['Leverancier']?.rich_text?.[0]?.plain_text || '',
           aliassen: aliasRaw ? aliasRaw.split(',').map(a => a.trim().toLowerCase()).filter(Boolean) : [],
-          isDrank: props['IsDrank']?.checkbox || false,
+          isDrank: props['Is drank']?.checkbox || false,
           categorie: props['Categorie']?.select?.name || '',
         });
       }
@@ -137,7 +137,7 @@ class NotionSync {
     try {
       await this.client.pages.create({ parent: { database_id: this.dbId }, properties: {
         ...props,
-        'IsDrank': { checkbox: item.isDrank || false },
+        'Is drank': { checkbox: item.isDrank || false },
         'Categorie': { select: { name: item.categorie || 'droogwaren' } },
         'Laatste update': { date: { start: today } }
       }});
