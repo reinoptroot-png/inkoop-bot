@@ -2,6 +2,7 @@
  * Headless runner — geen Electron nodig.
  * Leest config uit .env of omgevingsvariabelen.
  * Gebruik: node src/headless.js
+ *          node src/headless.js --rescan   (ook al gelezen emails, afgelopen 7 dagen)
  */
 require('dotenv').config();
 
@@ -21,6 +22,11 @@ const settings = {
   alertThreshold: parseInt(process.env.ALERT_THRESHOLD || '10', 10),
 };
 
+const rescan = process.argv.includes('--rescan');
+const scanOpts = rescan
+  ? { reprocess: true, lookbackDays: 7, markSeen: false }
+  : {};
+
 async function run() {
   const missing = ['imapUser', 'imapPass', 'notionToken', 'notionDbId', 'anthropicKey']
     .filter(k => !settings[k]);
@@ -29,13 +35,13 @@ async function run() {
     process.exit(1);
   }
 
-  console.log(`[inkoop-bot] Scan gestart — ${new Date().toISOString()}`);
+  console.log(`[inkoop-bot] Scan gestart — ${new Date().toISOString()}${rescan ? ' (--rescan: ook gelezen emails)' : ''}`);
 
   const scanPromises = [];
   if (settings.imapUser && settings.imapPass)
-    scanPromises.push(new ImapScanner({ ...settings }).scan());
+    scanPromises.push(new ImapScanner({ ...settings }).scan(scanOpts));
   if (settings.imapUser2 && settings.imapPass2)
-    scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 }).scan());
+    scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 }).scan(scanOpts));
 
   const results = (await Promise.all(scanPromises)).flat();
   console.log(`[inkoop-bot] ${results.length} items gescand`);
