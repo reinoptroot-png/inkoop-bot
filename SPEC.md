@@ -165,7 +165,65 @@ Drie features via Supabase Realtime:
 
 ---
 
-## Fase 3 — Dagrapport import (Lightspeed)
+## Fase 3 — Scan conflict melding + alias suggesties (PRIORITEIT)
+
+### 3a — Automatische alias suggestie (inkoop bot)
+
+#### Probleem
+De inkoop bot maakt bij een fuzzy match (>80%) automatisch een alias aan zonder bevestiging. Bij een verkeerde match (bijv. "kip dij" → "kip filet") ontstaat stille datavervuiling.
+
+#### Gewenst gedrag
+Wanneer de bot een nieuw product tegenkomt dat qua naam lijkt op een bestaand ingredient (fuzzy match >80%), wordt **niet automatisch** een alias aangemaakt. In plaats daarvan:
+
+1. Bot schrijft de suggestie naar Supabase tabel `alias_suggestions`:
+   ```
+   id, scan_naam, bestaand_naam, bestaand_page_id, score, status ('pending')
+   ```
+2. Inkoop monitor of Ingrediënten pagina toont een banner:
+   > "Is **'[scan naam]'** hetzelfde als **'[bestaand ingredient]'**? Dan voegen we een alias toe."
+3. **Ja** → alias wordt toegevoegd aan het bestaande ingredient in Notion, `status: 'accepted'`
+4. **Nee** → nieuw ingredient aangemaakt zoals normaal, `status: 'rejected'`
+5. Pending suggesties blijven zichtbaar totdat ze worden afgehandeld
+
+#### Te bouwen
+- `notion-sync.js`: bij fuzzy match → schrijf naar Supabase i.p.v. auto-alias
+- Supabase tabel `alias_suggestions` aanmaken
+- API route `POST /api/alias-suggestie` — verwerkt ja/nee beslissing
+- UI banner in Ingrediënten pagina (pages/ingredienten.js) bovenaan observaties
+- Inkoop bot `headless.js`: SUPABASE_URL + SUPABASE_ANON_KEY env vars toevoegen
+
+#### Datamodel Supabase
+```sql
+create table alias_suggestions (
+  id uuid primary key default gen_random_uuid(),
+  scan_naam text not null,
+  bestaand_naam text not null,
+  bestaand_page_id text not null,
+  score numeric not null,
+  status text default 'pending', -- 'pending' | 'accepted' | 'rejected'
+  created_at timestamptz default now()
+);
+```
+
+---
+
+### 3b — Scan conflict melding (PRIORITEIT)
+
+#### Probleem
+Als twee scans tegelijk lopen (bijv. na `--rescan`) of als een scan een ingredient bijwerkt dat net handmatig is aangepast, overschrijft de bot stilletjes de handmatige waarde.
+
+#### Gewenst gedrag
+- Bot detecteert of een ingredient in de afgelopen 30 minuten handmatig is bijgewerkt (`Laatste update` veld in Notion)
+- Zo ja: slaat de bot-update over en logt een conflict waarschuwing
+- Conflict wordt zichtbaar in de Inkoop monitor als een melding: "Bot wilde [naam] bijwerken maar er was een recente handmatige wijziging"
+
+#### Te bouwen
+- `notion-sync.js` `updatePriceOnly()`: check `Laatste update` voor schrijven
+- Conflicten loggen naar console én optioneel naar Supabase `scan_conflicts` tabel
+
+---
+
+## Fase 4 — Dagrapport import (Lightspeed)
 
 ### Doel
 Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot scant dit emailadres en importeert de verkoopdata zodat foodcost% per gerecht actueel blijft.
