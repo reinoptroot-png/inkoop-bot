@@ -9,6 +9,24 @@ require('dotenv').config();
 const ImapScanner = require('./imap-scanner');
 const NotionSync  = require('./notion-sync');
 
+// Supabase meldingen schrijven (optioneel — werkt ook zonder SUPABASE_URL)
+let supabase = null;
+if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+  try {
+    const { createClient } = require('@supabase/supabase-js');
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+  } catch {}
+}
+
+async function schrijfMelding(data) {
+  if (!supabase) return;
+  try {
+    await supabase.from('scan_meldingen').insert(data);
+  } catch (e) {
+    console.warn('[melding] Supabase schrijffout:', e.message);
+  }
+}
+
 const settings = {
   imapHost:       process.env.IMAP_HOST       || 'imap.one.com',
   imapPort:       process.env.IMAP_PORT       || '993',
@@ -61,27 +79,65 @@ async function run() {
 
   const alerts = [];
   for (const item of results) {
-    const existing = notionPrices.find(n =>
-      n.name.toLowerCase().trim() === item.ingredient.toLowerCase().trim()
-    );
+    const naam = item.ingredient.toLowerCase().trim();
+    const existing = notionPrices.find(n => n.name === naam);
+
     if (existing) {
-      const diff = ((item.price - existing.price) / existing.price) * 100;
-      if (Math.abs(diff) >= settings.alertThreshold) {
+      const diff = existing.price ? ((item.price - existing.price) / existing.price) * 100 : 0;
+      const pctAbs = Math.abs(diff);
+
+      if (pctAbs >= settings.alertThreshold) {
+        // Grote wijziging: Notion update uitstellen — gebruiker moet accepteren
         alerts.push({ ingredient: item.ingredient, oldPrice: existing.price, newPrice: item.price, diff: diff.toFixed(1) });
+        await schrijfMelding({
+          type: 'prijs_groot',
+          ingredient_naam: naam,
+          leverancier: item.leverancier || '',
+          prijs_oud: existing.price,
+          prijs_nieuw: item.price,
+          wijziging_pct: parseFloat(diff.toFixed(2)),
+          bestaand_page_id: existing.pageId,
+          status: 'pending',
+          gelezen: false,
+        });
+        console.log(`  ⚠ GROOT: "${naam}" €${existing.price} → €${item.price} (${diff.toFixed(1)}%) — wacht op bevestiging`);
+      } else {
+        // Kleine wijziging: meteen bijwerken
+        await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier);
+        if (pctAbs > 0) {
+          await schrijfMelding({
+            type: 'prijs_klein',
+            ingredient_naam: naam,
+            leverancier: item.leverancier || '',
+            prijs_oud: existing.price,
+            prijs_nieuw: item.price,
+            wijziging_pct: parseFloat(diff.toFixed(2)),
+            bestaand_page_id: existing.pageId,
+            status: 'accepted',
+            gelezen: false,
+          });
+        }
       }
-    }
-    if (existing) {
-      await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier);
     } else {
+      // Nieuw product: aanmaken in Notion + informatieve melding
       await notion.createProduct(item);
+      await schrijfMelding({
+        type: 'nieuw_product',
+        ingredient_naam: naam,
+        leverancier: item.leverancier || '',
+        prijs_nieuw: item.price,
+        status: 'pending',
+        gelezen: false,
+      });
+      console.log(`  ✨ NIEUW: "${naam}" via ${item.leverancier}`);
     }
   }
 
   if (alerts.length) {
-    console.log(`[inkoop-bot] ${alerts.length} alert(s):`);
+    console.log(`[inkoop-bot] ${alerts.length} grote prijswijziging(en) — wachten op bevestiging in app:`);
     alerts.forEach(a => console.log(`  ⚠ ${a.ingredient}: €${a.oldPrice} → €${a.newPrice} (${a.diff}%)`));
   } else {
-    console.log('[inkoop-bot] Geen prijsafwijkingen boven drempelwaarde.');
+    console.log('[inkoop-bot] Geen grote prijsafwijkingen.');
   }
 
   console.log('[inkoop-bot] Klaar.');

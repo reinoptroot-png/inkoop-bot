@@ -222,18 +222,19 @@ Elke scanrun schrijft gestructureerde meldingen naar Supabase. De Inkoop monitor
 
 ---
 
-#### Notificatiebadge op Inkoop monitor tab
+#### Notificatiebadge op Ingrediënten tab
 
-- Rode cirkel met getal rechtsbovenaan de "Inkoop monitor" tab in de navigatiebalk
+- Rode cirkel met getal rechtsbovenaan de "Ingrediënten" tab in de navigatiebalk
 - Toont het aantal meldingen met `gelezen = false`
 - Badge verdwijnt zodra alle meldingen gelezen zijn (of geen pending oranje/blauwe meldingen meer)
 - Telt alleen meldingen van de afgelopen 7 dagen mee
+- Pollt elke 60 seconden via `GET /api/meldingen?count=true`
 
 ---
 
-#### Meldingen sectie in Inkoop monitor (pages/inkoop.js)
+#### Meldingen sectie in Ingrediënten pagina (pages/ingredienten.js)
 
-- Bovenaan de pagina, boven de statusbalk
+- Bovenaan de pagina, boven de zoekbalk
 - Elke melding als een kaartje met gekleurde linkerbalk (groen / oranje / blauw)
 - Kaartje bevat: meldingtype-icoon, tekst, tijdstip ("3 uur geleden"), actieknoppen indien van toepassing
 - Informatieve meldingen (groen) worden automatisch als gelezen gemarkeerd bij paginabezoek
@@ -289,15 +290,18 @@ Voor `prijs_groot` en `nieuw_product`: de prijs-update wordt uitgesteld totdat d
 
 ---
 
-#### Te bouwen
-- Supabase tabel `scan_meldingen` aanmaken
-- `src/notion-sync.js`: meldingen schrijven bij elke scanactie (zie tabel boven)
-- `pages/api/meldingen/index.js` — GET route
-- `pages/api/meldingen/[id]/lees.js` — POST route
-- `pages/api/meldingen/[id]/actie.js` — POST route + Notion prijsupdate bij `accepted`
-- `pages/inkoop.js`: meldingen sectie bovenaan toevoegen
-- `pages/_app.js` of navigatiecomponent: badge ophalen via polling (elke 60s) of Supabase Realtime subscription op `scan_meldingen`
-- Inkoop bot `headless.js`: SUPABASE_URL + SUPABASE_ANON_KEY env vars toevoegen
+#### Gebouwd ✅
+- `pages/api/meldingen/index.js` — GET (lijst + count), POST (bot schrijft melding)
+- `pages/api/meldingen/[id].js` — POST `{ actie: 'lees' | 'accepted' | 'ignored' }` + Notion prijsupdate bij `accepted`
+- `pages/ingredienten.js` — `MeldingenSectie` bovenaan pagina; informatieve meldingen automatisch gelezen bij paginabezoek
+- `lib/shared.js` Topbar — badge op Ingrediënten tab, pollt elke 60s
+- `src/headless.js` — schrijft meldingen naar Supabase per scanactie; grote wijzigingen (>10%) stellen Notion-update uit tot gebruiker accepteert
+- `@supabase/supabase-js` toegevoegd aan bot `package.json`
+- `.env.example` — SUPABASE_URL + SUPABASE_ANON_KEY gedocumenteerd
+
+#### Nog te doen
+- Supabase tabel `scan_meldingen` aanmaken (zie SQL in datamodel hierboven)
+- `SUPABASE_URL` + `SUPABASE_ANON_KEY` toevoegen aan bot `.env` en Mac cronjob env
 
 ---
 
