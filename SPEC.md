@@ -542,27 +542,61 @@ create index on lightspeed_verkopen (datum desc);
 ## Fase 4c — Wekelijkse e-mailrapportage
 
 ### Doel
-Elke maandag automatisch een e-mail sturen met een samenvatting van de inkoopweek: prijsstijgingen, gerechten onder druk, en top prijsstijgers per leverancier.
+Elke maandag om 07:00 automatisch een e-mail sturen via nodemailer met een volledig weekoverzicht: omzet, inkoop, FC% per restaurant, gerechten onder druk, top prijsstijgers, top sellers en openstaande acties.
 
-### Inhoud van de e-mail
-1. **Prijsstijgingen afgelopen week** — alle ingrediënten met een prijswijziging >5% in de afgelopen 7 dagen, gesorteerd op % stijging (hoogste eerst). Per regel: naam, leverancier, was-prijs, nieuwe prijs, % wijziging.
-2. **FC% per gerecht** — alle actieve gerechten (Huidig menu + Binnenkort) gesorteerd van hoogste naar laagste foodcost%. Per regel: gerechtnaam, FC%, VK, categorie.
-3. **Gerechten onder druk** — gerechten met FC% >30%, uitgelicht als waarschuwing. Per gerecht: naam, FC%, oorzaak (welk ingredient steeg + hoeveel).
-4. **Top prijsstijgers per leverancier** — per leverancier de top 3 ingrediënten met de grootste prijsstijging die week.
+### Definitief e-mail ontwerp
+
+De e-mail bestaat uit zeven secties, in volgorde:
+
+#### 1. Overzicht week
+Drie kerngetallen van de afgelopen week vergeleken met de week ervoor:
+- **Totale omzet** — € bedrag + pijltje stijgt/daalt vs vorige week
+- **Totale inkoop** — € bedrag + pijltje stijgt/daalt vs vorige week
+- **Gemiddelde FC%** — % + pijltje stijgt/daalt vs vorige week
+
+#### 2. FC% per restaurant
+Twee kolommen naast elkaar (Europizza | Restaurant Europa), per restaurant:
+- Omzet die week
+- Inkoop die week
+- FC% die week met kleurindicatie (groen <25%, oranje 25–30%, rood >30%)
+
+#### 3. Gerechten onder druk
+Gerechten met FC% >30%, per restaurant gegroepeerd. Per gerecht:
+- Naam, FC%, VK excl. BTW
+- Welk ingrediënt de stijging veroorzaakte + hoeveel % het steeg
+
+#### 4. Top 3 prijsstijgers van de week
+Per leverancier de 3 ingrediënten met de grootste prijsstijging die week. Per regel:
+- Ingrediëntnaam, was-prijs → nieuwe prijs, % wijziging
+
+#### 5. Top 5 sellers van de week
+Via Lightspeed CSV — de 5 best verkochte gerechten die week. Per gerecht:
+- Naam, aantal verkocht, omzet
+
+#### 6. Actie vereist
+- Aantal openstaande scan meldingen (type `prijs_groot` of `nieuw_product`, status `pending`)
+- Nieuwe producten ter controle (type `nieuw_product`)
+- Link per melding: `[app-url]/ingredienten#meldingen`
+
+#### 7. Link naar de app
+Vaste footer: `Bekijk de volledige rapportage → [app-url]`
+
+---
 
 ### Verzending
-- Elke maandag om 07:00 (Nederlandse tijd), getriggerd via de Mac cronjob (zelfde job als de dagelijkse scan)
+- Elke maandag om 07:00 (Nederlandse tijd), getriggerd via de Mac cronjob
 - Script: `src/weekly-report.js` — standalone, los van `scan.js`
-- Cronjob entry: maandag 07:00 → `node src/weekly-report.js`
+- Cronjob entry: `0 7 * * 1 cd /pad/naar/inkoop-bot-v9 && node src/weekly-report.js`
+- Verstuurd via nodemailer (SMTP, zelfde server als IMAP)
 
 ### E-mailadressen
-- Instelbaar via de **Instellingen pagina** in de webapp (pages/instellingen.js)
+- Instelbaar via de **Instellingen pagina** in de webapp (`pages/instellingen.js`)
 - Één of meerdere adressen (komma-gescheiden invoer)
 - Opgeslagen in Supabase tabel `instellingen` (key: `rapport_emails`, value: komma-gescheiden string)
 - Fallback: als geen adressen ingesteld → geen e-mail verstuurd, alleen console log
 
-### Instellingen pagina (pages/instellingen.js)
-- Zesde tabblad in de topbar: Calculator / Menu / Inkoop monitor / Ingrediënten / Recepten / **Instellingen**
+### Instellingen pagina (`pages/instellingen.js`)
+- Tab in de topbar: Calculator / Menu / Inkoop monitor / Ingrediënten / Recepten / **Instellingen**
 - Sectie "Wekelijkse rapportage":
   - Tekstveld: "E-mailadressen (komma-gescheiden)" — bijv. `rein@europa.rest, chef@europizza.rest`
   - Opslaan knop → schrijft naar Supabase `instellingen`
@@ -570,31 +604,45 @@ Elke maandag automatisch een e-mail sturen met een samenvatting van de inkoopwee
 - Later uitbreidbaar met andere instellingen (drempel alerts, leverancier-mapping, etc.)
 
 ### Technische aanpak
-- `src/weekly-report.js`:
-  1. Laad prijshistorie uit Notion Inkoop Geschiedenis (afgelopen 7 dagen)
-  2. Laad gerechten + ingrediënten uit Notion via `/api/plates` logica
-  3. Bereken FC% per gerecht (zelfde logica als Calculator)
-  4. Stel e-mail samen als plain-text + eenvoudige HTML tabel
-  5. Verstuur via nodemailer (SMTP, zelfde credentials als IMAP)
-  6. Lees `rapport_emails` uit Supabase `instellingen` tabel
+`src/weekly-report.js`:
+1. Lees `rapport_emails` uit Supabase `instellingen`
+2. Laad prijshistorie afgelopen 14 dagen (voor week-over-week vergelijking) uit Notion Inkoop Geschiedenis
+3. Laad actieve gerechten + ingrediënten uit Notion voor beide restaurants
+4. Bereken FC% per gerecht (zelfde logica als Calculator) op basis van huidige prijzen
+5. Laad omzetdata uit Lightspeed CSV (indien beschikbaar) voor top sellers + omzetcijfers
+6. Laad openstaande scan meldingen uit Supabase `scan_meldingen`
+7. Stel HTML-e-mail op met de zeven secties
+8. Verstuur via nodemailer SMTP
 
 ### Supabase tabel
 ```sql
-create table instellingen (
-  key text primary key,
+create table if not exists instellingen (
+  restaurant text not null default 'shared',
+  key text not null,
   value text,
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  primary key (restaurant, key)
 );
--- Initieel: insert into instellingen (key, value) values ('rapport_emails', '');
+```
+_Initieel: `insert into instellingen (restaurant, key, value) values ('shared', 'rapport_emails', '');`_
+
+### Omgevingsvariabelen (nieuw)
+```
+SMTP_HOST=smtp.one.com
+SMTP_PORT=587
+SMTP_USER=facturen@jouwrestaurant.nl
+SMTP_PASS=
+APP_URL=https://europizza-calculator.vercel.app
 ```
 
 ### Nog te bouwen
-- `src/weekly-report.js` — dataverzameling, FC%-berekening, e-mail opmaak, verzending
+- `src/weekly-report.js` — dataverzameling, FC%-berekening, HTML e-mail opmaak, verzending
 - `pages/instellingen.js` — Instellingen pagina met rapport_emails veld
 - `pages/api/instellingen.js` — GET/POST route voor Supabase `instellingen` tabel
 - Supabase tabel `instellingen` aanmaken
 - Maandag cronjob entry toevoegen aan Mac cronjob configuratie
 - Nodemailer dependency toevoegen (`npm install nodemailer`)
+- `.env.example` uitbreiden met SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, APP_URL
 
 ---
 
