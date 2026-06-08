@@ -300,8 +300,54 @@ Voor `prijs_groot` en `nieuw_product`: de prijs-update wordt uitgesteld totdat d
 - `.env.example` — SUPABASE_URL + SUPABASE_ANON_KEY gedocumenteerd
 
 #### Nog te doen
-- Supabase tabel `scan_meldingen` aanmaken (zie SQL in datamodel hierboven)
+- Supabase tabel `scan_meldingen` aanmaken ✅ gedaan
 - `SUPABASE_URL` + `SUPABASE_ANON_KEY` toevoegen aan bot `.env` en Mac cronjob env
+
+---
+
+### 3c — Restaurant switcher in navigatie
+
+#### Doel
+Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan wisselen tussen restaurants. Menu, Calculator en Archief laden de gerechten van het geselecteerde restaurant. Ingrediënten, Inkoop monitor en Instellingen blijven gedeeld (leveranciers en inkoopprijzen zijn restaurantoverstijgend).
+
+#### Restaurants
+| Naam | Notion DB ID | Status |
+|---|---|---|
+| Europizza | `9d9f404d-3072-4857-a3be-860d52355727` | actief |
+| Restaurant Europa | `11b0a6bb-111f-4b87-bc7f-518713a6331d` | actief |
+| Euro Soft | _(volgt later)_ | gepland |
+
+#### Gedrag
+- Klik op EP-logo → dropdown opent met restaurantlijst
+- Actieve keuze opgeslagen in `localStorage('ep-restaurant')` — default `'europizza'`
+- Bij wisselen: gerechtenlijst (sidebar Calculator, Menu pagina, Archief) herlaadt met de juiste Notion DB
+- Topbar toont de actieve restaurantnaam naast/onder het logo (bijv. "EP · Europa")
+- Presence (multi-user) blijft per restaurant gescheiden via het `restaurant`-veld in Supabase
+
+#### Welke pagina's wisselen mee
+| Pagina | Wisselt mee | Reden |
+|---|---|---|
+| Calculator (/) | ✅ | gerechten zijn per restaurant |
+| Menu (/menu) | ✅ | statusbeheer per restaurant |
+| Archief (/archief) | ✅ | gearchiveerde gerechten per restaurant |
+| Inkoop monitor (/inkoop) | ✗ | inkoopprijzen zijn gedeeld |
+| Ingrediënten (/ingredienten) | ✗ | ingrediëntendatabase is gedeeld |
+| Instellingen (/instellingen) | ✗ | configuratie is gedeeld |
+
+#### Technische aanpak
+- `lib/shared.js` Topbar: EP-logo vervangen door `<RestaurantSwitcher />` component
+- `RestaurantSwitcher`: dropdown met restaurantlijst, schrijft naar `localStorage('ep-restaurant')`
+- `lib/shared.js`: exporteer `useRestaurant()` hook — leest `ep-restaurant` uit localStorage, biedt `restaurantId` en `restaurantNaam`
+- `pages/api/plates.js`: accepteer query param `?restaurant=europizza|europa` → kiest juiste Notion DB ID
+- `pages/index.js`, `pages/menu.js`, `pages/archief.js`: gebruik `useRestaurant()` om de juiste DB te laden
+- `pages/api/sync.js`, `pages/api/update-vk.js`: schrijven altijd naar de DB van het geselecteerde restaurant (meegegeven als param)
+
+#### Nog te bouwen
+- `RestaurantSwitcher` component in `lib/shared.js`
+- `useRestaurant()` hook in `lib/shared.js`
+- `pages/api/plates.js` uitbreiden met `restaurant` param
+- `pages/index.js`, `pages/menu.js`, `pages/archief.js` aanpassen om restaurant-aware te zijn
+- `pages/api/sync.js` en `pages/api/update-vk.js` restaurant-param doorgeven
 
 ---
 
@@ -332,13 +378,77 @@ Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot
 
 ---
 
-## Fase 4a — Finance dashboard
+## Fase 4a — Multi-restaurant dashboard (eerste tab)
 
 ### Doel
-Na de Lightspeed CSV-koppeling is er voor het eerst gecombineerde omzet- én inkoopdata beschikbaar. Dit dashboard maakt die data zichtbaar op één pagina zodat je in één oogopslag ziet hoe het restaurant financieel presteert.
+Na de Lightspeed CSV-koppeling en restaurant switcher is er gecombineerde omzet- én inkoopdata per restaurant beschikbaar. Het dashboard is de **eerste tab** in de navigatie — het overzicht dat je ziet als je de app opent. Het geeft in één oogopslag de financiële status van alle restaurants tegelijk.
 
 ### Locatie
-Nieuwe pagina: `pages/finance.js` — zevende tabblad in de topbar rechts naast Instellingen, of als subtab binnen de Inkoop monitor.
+`pages/dashboard.js` — wordt de **standaard startpagina** (`/dashboard`), vóór Calculator in de navigatie. Of via een aparte Homeknop links van de restaurant switcher.
+
+### Bouwen na
+Fase 4 (Lightspeed CSV import) — dashboard heeft omzetdata nodig.
+
+---
+
+### Onderdeel 1 — Restaurant kaartjes
+
+Drie kaartjes naast elkaar (één per restaurant: Europizza · Restaurant Europa · Euro Soft):
+
+Per kaartje:
+- Restaurantnaam
+- **Omzet vandaag** (uit Lightspeed, excl. BTW)
+- **Omzet deze week**
+- **FC% gemiddeld** over actieve gerechten
+- Kleurcodering FC%: groen <25%, oranje 25–30%, rood >30%
+- Klik op kaartje → wisselt naar dat restaurant in de app (zet `ep-restaurant` in localStorage + navigeert naar Calculator)
+
+---
+
+### Onderdeel 2 — Revenue & Spend trends (alle restaurants gecombineerd)
+
+- Lijndiagram met twee lijnen over tijd (dag / week / maand — schakelbaar)
+- **Omzet** (Lightspeed): totale verkoopopbrengst excl. BTW, alle restaurants samen
+- **Inkoopkosten** (Inkoop Geschiedenis): som van gescande prijzen per periode
+- Optioneel: per restaurant apart tonen via filter pills
+- X-as: datum, Y-as: euro. Kleur omzet: groen (#2a7a3b), kleur inkoop: rood (#c0392b)
+
+---
+
+### Onderdeel 3 — Top sellers dag / week / maand
+
+- Tabel of kaartjesrij met top 5 best verkochte gerechten per periode
+- Schakelbaar: vandaag / deze week / deze maand
+- Per gerecht: naam, aantal verkopen, omzet, FC%
+- Data uit `lightspeed_verkopen` Supabase tabel
+- Filter: per restaurant of alle samen
+
+---
+
+### Onderdeel 4 — Prijsalerts alle restaurants
+
+- Gecombineerde alertlijst van alle restaurants
+- Zelfde kaartjesformaat als Inkoop monitor stijgers/dalers
+- Badge met totaal aantal openstaande alerts
+- Klik op alert → navigeert naar Ingrediënten pagina van het betreffende restaurant
+
+---
+
+### Nog te bouwen
+- `pages/dashboard.js` — dashboard pagina als startpagina
+- `pages/api/dashboard.js` — aggregatiequery's: omzet per restaurant, FC% per restaurant, top sellers, gecombineerde alerts
+- Navigatie updaten: Dashboard als eerste tab, vóór Menu
+- Restaurant kaartjes koppelen aan `ep-restaurant` localStorage switcher
+
+---
+
+## Fase 4b — Finance dashboard (per restaurant)
+
+### Doel
+Na de Lightspeed CSV-koppeling is er voor het eerst gecombineerde omzet- én inkoopdata beschikbaar. Dit dashboard maakt die data zichtbaar op één pagina zodat je in één oogopslag ziet hoe **het geselecteerde restaurant** financieel presteert.
+
+### Locatie
+Nieuwe pagina: `pages/finance.js` — tabblad in de topbar, zichtbaar voor het actieve restaurant.
 
 ### Vier onderdelen
 
@@ -393,15 +503,15 @@ create index on lightspeed_verkopen (datum desc);
 ```
 
 ### Nog te bouwen
-- `pages/finance.js` — dashboard pagina met vier onderdelen
+- `pages/finance.js` — per-restaurant finance pagina met vier onderdelen
 - `pages/api/finance.js` — aggregatiequery's: omzet + inkoop per periode, per leverancier, bar/keuken split, FC% trending
-- Supabase tabel `lightspeed_verkopen` aanmaken
+- Supabase tabel `lightspeed_verkopen` uitbreiden met `restaurant` kolom
 - `src/lightspeed-parser.js` uitbreiden met schrijven naar `lightspeed_verkopen`
 - Grafiek library: gebruik SVG (zelfde aanpak als bestaande sparklines) of `recharts` indien al aanwezig
 
 ---
 
-## Fase 4b — Wekelijkse e-mailrapportage
+## Fase 4c — Wekelijkse e-mailrapportage
 
 ### Doel
 Elke maandag automatisch een e-mail sturen met een samenvatting van de inkoopweek: prijsstijgingen, gerechten onder druk, en top prijsstijgers per leverancier.
@@ -460,7 +570,7 @@ create table instellingen (
 
 ---
 
-## Fase 4c — Onboarding wizard
+## Fase 4d — Onboarding wizard
 
 ### Doel
 Bij eerste gebruik doorloopt een nieuwe gebruiker een begeleide setup flow zodat de bot meteen correct geconfigureerd is. Legt tevens de basis voor eventuele toekomstige multi-tenant uitbreiding (meerdere restaurants op dezelfde installatie).
