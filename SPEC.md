@@ -277,6 +277,65 @@ Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot
 
 ---
 
+## Fase 4b — Wekelijkse e-mailrapportage
+
+### Doel
+Elke maandag automatisch een e-mail sturen met een samenvatting van de inkoopweek: prijsstijgingen, gerechten onder druk, en top prijsstijgers per leverancier.
+
+### Inhoud van de e-mail
+1. **Prijsstijgingen afgelopen week** — alle ingrediënten met een prijswijziging >5% in de afgelopen 7 dagen, gesorteerd op % stijging (hoogste eerst). Per regel: naam, leverancier, was-prijs, nieuwe prijs, % wijziging.
+2. **FC% per gerecht** — alle actieve gerechten (Huidig menu + Binnenkort) gesorteerd van hoogste naar laagste foodcost%. Per regel: gerechtnaam, FC%, VK, categorie.
+3. **Gerechten onder druk** — gerechten met FC% >30%, uitgelicht als waarschuwing. Per gerecht: naam, FC%, oorzaak (welk ingredient steeg + hoeveel).
+4. **Top prijsstijgers per leverancier** — per leverancier de top 3 ingrediënten met de grootste prijsstijging die week.
+
+### Verzending
+- Elke maandag om 07:00 (Nederlandse tijd), getriggerd via de Mac cronjob (zelfde job als de dagelijkse scan)
+- Script: `src/weekly-report.js` — standalone, los van `scan.js`
+- Cronjob entry: maandag 07:00 → `node src/weekly-report.js`
+
+### E-mailadressen
+- Instelbaar via de **Instellingen pagina** in de webapp (pages/instellingen.js)
+- Één of meerdere adressen (komma-gescheiden invoer)
+- Opgeslagen in Supabase tabel `instellingen` (key: `rapport_emails`, value: komma-gescheiden string)
+- Fallback: als geen adressen ingesteld → geen e-mail verstuurd, alleen console log
+
+### Instellingen pagina (pages/instellingen.js)
+- Zesde tabblad in de topbar: Calculator / Menu / Inkoop monitor / Ingrediënten / Recepten / **Instellingen**
+- Sectie "Wekelijkse rapportage":
+  - Tekstveld: "E-mailadressen (komma-gescheiden)" — bijv. `rein@europa.rest, chef@europizza.rest`
+  - Opslaan knop → schrijft naar Supabase `instellingen`
+  - Bevestiging: "Instellingen opgeslagen" toast
+- Later uitbreidbaar met andere instellingen (drempel alerts, leverancier-mapping, etc.)
+
+### Technische aanpak
+- `src/weekly-report.js`:
+  1. Laad prijshistorie uit Notion Inkoop Geschiedenis (afgelopen 7 dagen)
+  2. Laad gerechten + ingrediënten uit Notion via `/api/plates` logica
+  3. Bereken FC% per gerecht (zelfde logica als Calculator)
+  4. Stel e-mail samen als plain-text + eenvoudige HTML tabel
+  5. Verstuur via nodemailer (SMTP, zelfde credentials als IMAP)
+  6. Lees `rapport_emails` uit Supabase `instellingen` tabel
+
+### Supabase tabel
+```sql
+create table instellingen (
+  key text primary key,
+  value text,
+  updated_at timestamptz default now()
+);
+-- Initieel: insert into instellingen (key, value) values ('rapport_emails', '');
+```
+
+### Nog te bouwen
+- `src/weekly-report.js` — dataverzameling, FC%-berekening, e-mail opmaak, verzending
+- `pages/instellingen.js` — Instellingen pagina met rapport_emails veld
+- `pages/api/instellingen.js` — GET/POST route voor Supabase `instellingen` tabel
+- Supabase tabel `instellingen` aanmaken
+- Maandag cronjob entry toevoegen aan Mac cronjob configuratie
+- Nodemailer dependency toevoegen (`npm install nodemailer`)
+
+---
+
 ## Database opschoning — 2026-06-06 ✅ VOLTOOID
 
 Uitgevoerd op Notion Inkoop Prijzen database (`b6258a232e6d4482b7b4f50cf449854f`):
