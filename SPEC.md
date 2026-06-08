@@ -342,12 +342,40 @@ Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan 
 - `pages/index.js`, `pages/menu.js`, `pages/archief.js`: gebruik `useRestaurant()` om de juiste DB te laden
 - `pages/api/sync.js`, `pages/api/update-vk.js`: schrijven altijd naar de DB van het geselecteerde restaurant (meegegeven als param)
 
-#### Nog te bouwen
-- `RestaurantSwitcher` component in `lib/shared.js`
-- `useRestaurant()` hook in `lib/shared.js`
-- `pages/api/plates.js` uitbreiden met `restaurant` param
-- `pages/index.js`, `pages/menu.js`, `pages/archief.js` aanpassen om restaurant-aware te zijn
+#### Gebouwd ✅
+- `RestaurantSwitcher` component + `useRestaurant()` hook + `wisselRestaurant()` in `lib/shared.js`
+- Topbar EP-logo vervangen door `<RestaurantSwitcher />` dropdown
+- `pages/api/plates.js` uitgebreid met `?restaurant=` param → kiest juiste Notion DB
+- `pages/index.js`: `useRestaurant()`, restaurant-aware `fetchPlates()`, herlaadt bij wisselen
+- `pages/menu.js`: `useRestaurant()`, `fetchPlatesWithCache(restaurant)`
+- Bij wisselen naar Restaurant Europa: Calculator toont `EuropaCalculator` tasting menu layout
+
+#### Nog te doen
+- `pages/archief.js` aanpassen om restaurant-aware te zijn
 - `pages/api/sync.js` en `pages/api/update-vk.js` restaurant-param doorgeven
+
+---
+
+### 3d — Europa Calculator layout
+
+#### Doel
+Wanneer Restaurant Europa geselecteerd is, toont de Calculator-pagina een **tasting menu layout** in plaats van de Europizza sidebar/detail view.
+
+#### Layout
+- Header: restaurant naam, tasting menu label, seizoenslabel (bewerkbaar), Nieuw seizoen + Sync → Notion knoppen
+- Totalen banner (4 kaartjes): aantal gangen, FC per couvert totaal, VK excl. BTW totaal, FC% badge
+- Gangen in volgorde: nummer | naam | ingrediënten-count | FC per couvert | FC% badge | uitklap-icoon
+- Uitklapbaar per gang: ingrediënten tabel (Ingrediënt, Hoeveelheid, Eenheid, Prijs, FC)
+- FC% badge: groen <25%, oranje 25-30%, rood >30%
+- Add-ons sectie onderaan (placeholder)
+- Gedeelde ingrediëntendatabase (prijzen uit dezelfde `ep-prijzen` localStorage)
+
+#### Gebouwd ✅
+- `EuropaCalculator` component in `pages/index.js`
+- Conditionele render: `restaurant === 'europa'` → `EuropaCalculator`, anders bestaande Calculator
+- Seizoenslabel met inline edit, bewaard in `localStorage('era-seizoen')`
+- Totalen banner met gang-count, FC totaal, VK totaal, FC% badge
+- Gangen uitklapbaar met ingrediënten tabel
 
 ---
 
