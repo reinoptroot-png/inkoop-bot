@@ -332,6 +332,75 @@ Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot
 
 ---
 
+## Fase 4a — Finance dashboard
+
+### Doel
+Na de Lightspeed CSV-koppeling is er voor het eerst gecombineerde omzet- én inkoopdata beschikbaar. Dit dashboard maakt die data zichtbaar op één pagina zodat je in één oogopslag ziet hoe het restaurant financieel presteert.
+
+### Locatie
+Nieuwe pagina: `pages/finance.js` — zevende tabblad in de topbar rechts naast Instellingen, of als subtab binnen de Inkoop monitor.
+
+### Vier onderdelen
+
+#### 1. Revenue & Spend trends
+- Lijndiagram met twee lijnen over tijd (dag / week / maand — schakelbaar)
+- **Omzet** (uit Lightspeed CSV): totale verkoopopbrengst excl. BTW
+- **Inkoopkosten** (uit Inkoop Geschiedenis): som van prijzen × verbruikte hoeveelheden per periode
+- X-as: datum, Y-as: euro. Schakelaar dag/week/maand rechtsboven
+- Kleur omzet: groen (#2a7a3b), kleur inkoop: rood (#c0392b)
+
+#### 2. Supplier spending overzicht
+- Horizontaal staafdiagram — één balk per leverancier
+- Toont totaal uitgegeven (€) per leverancier over de geselecteerde periode
+- Gesorteerd hoog → laag
+- Klikbaar: klik op leverancier → filter de Inkoop monitor op die leverancier
+
+#### 3. Bar / Keuken split
+- Twee kolommen naast elkaar: **Keuken** en **Bar**
+- Per kolom: omzet, inkoopkosten, FC%, brutowinst
+- Splitsing op basis van `isDrank` vlag op ingrediënten en Lightspeed productcategorie
+- Kleurcodering FC%: groen <25%, oranje 25–30%, rood >30%
+
+#### 4. Cost Percentage trending
+- Kaartje per gerecht (Huidig menu) met:
+  - Gerechtnaam + huidige FC%
+  - Pijltje omhoog (rood) of omlaag (groen) ten opzichte van vorige week
+  - Verschil in procentpunten, bijv. "+2,3pp"
+- Gesorteerd: hoogste stijging bovenaan
+- Alleen gerechten met data in zowel huidige als vorige week
+
+### Data bronnen
+| Gegeven | Bron |
+|---|---|
+| Omzet per dag/gerecht | Lightspeed CSV → Supabase `lightspeed_verkopen` tabel |
+| Inkoopkosten | Notion Inkoop Geschiedenis (prijs × hoeveelheid per ingredient per dag) |
+| FC% per gerecht | Calculator logica (bestaand) |
+| isDrank vlag | Notion Inkoop Prijzen `Is drank` veld |
+
+### Supabase tabel (aanmaken bij Fase 4 implementatie)
+```sql
+create table lightspeed_verkopen (
+  id uuid primary key default gen_random_uuid(),
+  datum date not null,
+  gerecht_naam text not null,
+  notion_page_id text,
+  aantal integer,
+  omzet_excl_btw numeric,
+  categorie text, -- 'keuken' | 'bar'
+  created_at timestamptz default now()
+);
+create index on lightspeed_verkopen (datum desc);
+```
+
+### Nog te bouwen
+- `pages/finance.js` — dashboard pagina met vier onderdelen
+- `pages/api/finance.js` — aggregatiequery's: omzet + inkoop per periode, per leverancier, bar/keuken split, FC% trending
+- Supabase tabel `lightspeed_verkopen` aanmaken
+- `src/lightspeed-parser.js` uitbreiden met schrijven naar `lightspeed_verkopen`
+- Grafiek library: gebruik SVG (zelfde aanpak als bestaande sparklines) of `recharts` indien al aanwezig
+
+---
+
 ## Fase 4b — Wekelijkse e-mailrapportage
 
 ### Doel
