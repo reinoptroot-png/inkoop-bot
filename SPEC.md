@@ -391,6 +391,64 @@ create table instellingen (
 
 ---
 
+## Fase 4c — Onboarding wizard
+
+### Doel
+Bij eerste gebruik doorloopt een nieuwe gebruiker een begeleide setup flow zodat de bot meteen correct geconfigureerd is. Legt tevens de basis voor eventuele toekomstige multi-tenant uitbreiding (meerdere restaurants op dezelfde installatie).
+
+### Flow (vier stappen)
+
+#### Stap 1 — Restaurant naam
+- Invoerveld: restaurantnaam (bijv. "Europizza")
+- Optioneel: logo uploaden (afbeelding, wordt opgeslagen in Supabase Storage)
+- Wordt opgeslagen als `restaurant_naam` in Supabase `instellingen` tabel
+- Getoond in de topbar naast het EP-logo (vervangt "EP" als ingesteld)
+
+#### Stap 2 — Leveranciers selecteren
+- Lijst met bekende Nederlandse leveranciers als selecteerbare pills:
+  **Bidfood · Hanos · Sligro · Lindenhoff · Vleeschatelier · Vanilla Venture · Van Gelder · Rungis · Bolomey · Dun Yong · Overig**
+- Meervoudige selectie — minimaal één verplicht
+- Per geselecteerde leverancier: optioneel een factuure-mailadres koppelen (bijv. `facturen@europizza.rest`)
+- Geselecteerde leveranciers worden opgeslagen als `actieve_leveranciers` in `instellingen`
+
+#### Stap 3 — Eerste factuur uploaden als test
+- Bestandsupload (PDF) — drag-and-drop of klik
+- Bot verwerkt de factuur direct (zelfde Claude-extractie als bij IMAP-scan)
+- Toont de geëxtraheerde producten als preview-tabel: naam / prijs / eenheid / leverancier
+- Gebruiker kan per rij goedkeuren of verwijderen vóór opslag in Notion
+- Sla resultaat op in Notion Inkoop Prijzen na bevestiging
+
+#### Stap 4 — Verificatie
+- Toont samenvatting: "X producten gevonden bij Y leverancier(s)"
+- Statuscheck: Notion-verbinding ✓ / Supabase ✓ / IMAP (als ingesteld) ✓ of ✗
+- Knop "Start gebruiken" → wizard afsluiten, `onboarding_voltooid: true` in `instellingen`
+- Optioneel: direct naar Ingrediënten pagina of Calculator
+
+### Wanneer tonen
+- Wizard toont als `onboarding_voltooid` ontbreekt of `false` is in Supabase `instellingen`
+- Na voltooiing nooit meer automatisch tonen — wel bereikbaar via Instellingen pagina ("Setup opnieuw doorlopen")
+
+### Multi-tenant basis
+- Elke `instellingen`-rij heeft een `restaurant` kolom (nu altijd `'europizza'`)
+- Wizard schrijft altijd naar `restaurant = 'europizza'` — structuur is klaar voor meerdere restaurants zonder code-aanpassing
+- Toekomstige uitbreiding: login-scherm → restaurant kiezen → eigen instellingen laden
+
+### Technische aanpak
+- `pages/onboarding.js` — wizard pagina (vier stappen als state machine: `stap: 1 | 2 | 3 | 4`)
+- `pages/api/onboarding/upload.js` — POST route: ontvangt PDF, roept Claude-extractie aan, retourneert preview
+- `pages/api/onboarding/bevestig.js` — POST route: schrijft goedgekeurde producten naar Notion
+- `pages/_app.js` — check `onboarding_voltooid` bij startup (naast naam-check); redirect naar `/onboarding` als niet voltooid
+- Wizard styles: zelfde palet als naamscherm (#f5f4f0, wit card, groen knop)
+
+### Nog te bouwen
+- `pages/onboarding.js` — vier-stap wizard
+- `pages/api/onboarding/upload.js` — PDF upload + Claude-extractie
+- `pages/api/onboarding/bevestig.js` — Notion schrijflogica
+- `pages/_app.js` — onboarding check toevoegen aan startup flow
+- `instellingen` tabel uitbreiden: `onboarding_voltooid boolean default false`, `restaurant_naam text`, `actieve_leveranciers text`
+
+---
+
 ## Database opschoning — 2026-06-06 ✅ VOLTOOID
 
 Uitgevoerd op Notion Inkoop Prijzen database (`b6258a232e6d4482b7b4f50cf449854f`):
