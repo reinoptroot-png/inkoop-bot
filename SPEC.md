@@ -394,17 +394,27 @@ Response `GET /api/plates?restaurant=europa`:
 - Seizoensnaam inline editbaar (klik → input → Enter/blur → `localStorage('era-seizoen')`)
 - Knoppen rechts: **↻ Herladen**, **Archiveer menu** (bevestigingsdialog), **Nieuw seizoen** (dialog)
 
-**Tabs**
-- `Huidig menu (N)` — actieve gangen
+#### Notion Tags (Plates Europa database) ✅
+| Tag | Kleur | Betekenis |
+|---|---|---|
+| `Tasting menu` | groen | Gang aanwezig in zowel Menu Europa als Menu Compact |
+| `Tasting menu europa` | blauw | Gang alleen in Menu Europa (niet in Compact) |
+| `À la carte` | oranje | À-la-carte item — apart zichtbaar als derde sectie |
+
+Bestaande pagina's met `(a la carte)` in de naam zijn automatisch getagd bij implementatie.
+
+**Tabs** (3 tabs)
+- `Menu Europa (N)` — gangen met tag `Tasting menu` of `Tasting menu europa`, VK default €119
+- `Menu Compact (N)` — gangen met tag `Tasting menu` alleen, VK default €93
 - `Archief (N)` — gearchiveerde gangen gegroepeerd per seizoen
 
-**Totalen banner** (5 kaartjes, alleen zichtbaar als gangen aanwezig)
+**Totalen banner** (5 kaartjes, per actieve tab berekend)
 | Kaartje | Waarde |
 |---|---|
-| Gangen | aantal actieve gangen |
-| FC per couvert | € som alle gang-FC (0 zolang Notion leeg) |
-| Aanbevolen VK | FC_totaal / (TARGET_FC / 100), target hard 30% |
-| Werkelijke VK | aanpasbaar invoerveld, opgeslagen in `localStorage('era-vk')` |
+| Gangen | aantal gangen in actieve tab |
+| FC per couvert | € som gang-FC voor actieve tab |
+| Aanbevolen VK | FC_totaal / 0.30 |
+| Werkelijke VK | aanpasbaar invoerveld, per tab opgeslagen in `localStorage('era-vk-map')` — default €119/€93 |
 | FC% | FC_totaal / werkelijke_VK × 100, badge groen(<25%)/oranje(25-30%)/rood(>30%) |
 
 **Gangenlijst** (grid: `28px 28px 1fr 50px 64px 64px 24px 24px`)
@@ -416,9 +426,15 @@ Response `GET /api/plates?restaurant=europa`:
 - **→**: link naar `/?gerecht={id}` (Calculator)
 - **×**: archiveer gang → DELETE `/api/europa/gang/[id]` (optimistisch)
 
+**À la carte sectie** (onder gangenlijst, geel-oranje kleurschema)
+- Toont gangen met tag `À la carte` — altijd zichtbaar op beide menu tabs
+- Geen drag-and-drop, geen VK/FC% berekening (VK per item verschilt)
+- Gang toevoegen / hernoemen / archiveren werkt identiek
+
 **Gang toevoegen**
-- `+ gang toevoegen` knop onderaan lijst → inline invoerveld
-- Enter → POST `/api/europa/gang` → gang verschijnt direct in lijst
+- `+ gang toevoegen` knop → inline invoerveld
+- Nieuwe gang krijgt automatisch de primaire tag van de actieve tab (`Tasting menu` of `Tasting menu europa`)
+- Enter → POST `/api/europa/gang` met `tag` param → gang verschijnt direct
 
 **Nieuw seizoen dialog**
 - Vraagt naam → archiveert alle actieve gangen → reset volgorde → nieuw seizoen actief
