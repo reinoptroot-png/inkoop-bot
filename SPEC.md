@@ -356,91 +356,79 @@ Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan 
 
 ---
 
-### 3d — Europa Menu pagina (bij Restaurant Europa)
+### 3d — Europa Menu pagina (bij Restaurant Europa) ✅
 
 #### Doel
 Wanneer Restaurant Europa geselecteerd is, toont de Menu-pagina een elegante lijstweergave van alle gangen in volgorde — bewerkbaar, herschikte via drag-and-drop, met realtime Notion sync.
 
-#### Notion databronnen
-- **Root pagina**: `11b0a6bb-111f-4b87-bc7f-518713a6331d` (Restaurant Europa)
-- **Plates Europa database**: child database binnen het Restaurant Europa workspace (bevat keukenreceptpagina's per gang)
-- **Structuur per gang in Notion**: heading_2 `{nr}. {naam}` → tabel met kolommen `[Ingrediënt, Netto, Eenheid, Yield%, Bruto, Prijs, Kostprijs]` → paragraph `Foodcost: € X,XX`
-- **Verkoopprijs** staat in eerste paragraph van de seizoenspagina: `Verkoopprijs € 119,00 incl. BTW · excl. BTW € 109,17 · Target 30%`
-- De **actieve seizoenspagina** is de meest recente `child_page` met "Foodcost" in de titel (bijv. `Foodcost — Spring Menu '26`)
+#### Notion databronnen ✅ (definitief)
+- **Plates Europa database**: `a19b52cb-da6e-4cad-b5a9-cc85f19b252a`
+- **Structuur per gang**: losse Notion pagina met `Naam` (title) + `Tags` (multi_select, seizoen)
+- **Seizoen** = eerste waarde uit `Tags` multi_select — geen aparte database
+- Gang archiveren = `archived: true` op Notion pagina (soft-delete, herstelbaar)
 
-#### API: `GET /api/plates?restaurant=europa`
-Parst de actieve Foodcost-pagina en retourneert:
+#### API ✅
+| Route | Methode | Status | Actie |
+|---|---|---|---|
+| `/api/plates?restaurant=europa` | GET | ✅ | Actieve gangen uit `a19b52cb` DB |
+| `/api/plates?restaurant=europa&archived=true` | GET | ✅ | Inclusief gearchiveerde gangen |
+| `/api/europa/gang` | POST | ✅ | Nieuwe gang aanmaken (Notion pagina in `a19b52cb`) |
+| `/api/europa/gang/[id]` | PATCH | ✅ | Gang hernoemen of seizoen-tag updaten |
+| `/api/europa/gang/[id]` | DELETE | ✅ | Gang archiveren (`archived: true`) |
+| `/api/europa/gang/[id]` | PUT | ✅ | Gang reactiveren (`archived: false`) |
+
+Response `GET /api/plates?restaurant=europa`:
 ```json
 {
   "plates": [
-    {
-      "id": "<heading-block-id>",
-      "naam": "Spring Salad",
-      "nummer": 1,
-      "fc": 3.73,
-      "vk": 10.917,
-      "categorie": "Gang",
-      "ingredienten": [
-        { "naam": "Komkommer Corselli", "hoeveelheid": 20, "eenheid": "g", "yld": 70, "prijs": 8.00, "kostprijs": 0.23 }
-      ]
-    }
-  ],
-  "meta": { "vkTotaal": 109.17, "fcTotaal": 29.89, "seizoen": "Spring Menu '26" }
+    { "id": "...", "naam": "Spring Salad", "seizoen": "Spring '26", "tags": ["Spring '26"],
+      "archived": false, "fc": 0, "vk": 0, "ingredienten": [], "categorie": "Gang" }
+  ]
 }
 ```
-- `fc` komt uit de `Kostprijs`-kolom (kolom 6) — pre-berekend in Notion
-- `vk` = `vkTotaal / aantal_gangen` (gelijke verdeling zolang geen per-gang VK in Notion)
-- Parsing: heading_2 → gang, heading_3 → sub-sectie (ingrediënten gaan naar dezelfde gang), table → ingrediënten, `Foodcost:` paragraph → `fc`
+> FC staat momenteel op 0 — ingrediëntentabellen in Notion zijn leeg (pre-existing, niet door onze code).
 
-#### Menu pagina layout (`pages/menu.js` bij `restaurant === 'europa'`)
+#### Menu pagina layout ✅ (`pages/menu.js`, component `EuropaMenu`)
 
 **Header**
-- Linksonder seizoenslabel (bijv. "Spring Menu '26") + knop **Nieuw seizoen** (opent inline invoerveld)
-- Seizoensnaam opgeslagen in `localStorage('era-seizoen')` + gesynchroniseerd met Notion via paginanaam
+- Seizoensnaam inline editbaar (klik → input → Enter/blur → `localStorage('era-seizoen')`)
+- Knoppen rechts: **↻ Herladen**, **Archiveer menu** (bevestigingsdialog), **Nieuw seizoen** (dialog)
 
-**Totalen banner** (4 kaartjes bovenin)
+**Tabs**
+- `Huidig menu (N)` — actieve gangen
+- `Archief (N)` — gearchiveerde gangen gegroepeerd per seizoen
+
+**Totalen banner** (5 kaartjes, alleen zichtbaar als gangen aanwezig)
 | Kaartje | Waarde |
 |---|---|
-| Gangen | aantal gangen |
-| FC per couvert | € som alle gang-FC |
-| Aanbevolen VK | FC_totaal / (target_fc_pct / 100) — target uit Instellingen |
-| Werkelijke VK | aanpasbaar invoerveld, default = Notion VK |
-| FC% | FC_totaal / werkelijke_VK × 100, badge groen/oranje/rood |
+| Gangen | aantal actieve gangen |
+| FC per couvert | € som alle gang-FC (0 zolang Notion leeg) |
+| Aanbevolen VK | FC_totaal / (TARGET_FC / 100), target hard 30% |
+| Werkelijke VK | aanpasbaar invoerveld, opgeslagen in `localStorage('era-vk')` |
+| FC% | FC_totaal / werkelijke_VK × 100, badge groen(<25%)/oranje(25-30%)/rood(>30%) |
 
-**Gangenlijst**
-Elke gang op een rij:
+**Gangenlijst** (grid: `28px 28px 1fr 50px 64px 64px 24px 24px`)
 ```
-[grip] [nr] [naam — inline editbaar]  [X ing.]  [€ FC]  [FC% badge]  [×]
+[grip⠿] [nr] [naam — inline editbaar]  [ing.]  [€ FC]  [FC%]  [→]  [×]
 ```
-- **Grip icoon** (⠿) links — drag-and-drop volgorde aanpassen; nieuwe volgorde schrijft nummers terug naar Notion
-- **Nummer** auto-bijgewerkt na drag
-- **Naam** inline editbaar via klik; Enter/blur → schrijft naar Notion
-- **FC** berekend uit `plate.fc` (uit Notion Kostprijs-kolom)
-- **FC% badge** = `plate.fc / (werkelijkeVK / aantalGangen) × 100`
-- **×** gang verwijderen (met bevestigingsdialog)
+- **Grip**: native HTML5 drag-and-drop — volgorde opgeslagen in `localStorage('era-volgorde-{seizoen}')`
+- **Naam**: klik → inline input → Enter/blur → PATCH `/api/europa/gang/[id]` (optimistisch)
+- **→**: link naar `/?gerecht={id}` (Calculator)
+- **×**: archiveer gang → DELETE `/api/europa/gang/[id]` (optimistisch)
 
 **Gang toevoegen**
-- `+ gang toevoegen` knop onderaan lijst
-- Voert naam in via inline invoerveld
-- Maakt nieuwe heading_2 blok aan in Notion seizoenspagina + lege tabel
+- `+ gang toevoegen` knop onderaan lijst → inline invoerveld
+- Enter → POST `/api/europa/gang` → gang verschijnt direct in lijst
 
-**Gedrag**
-- Geen aparte Sync-knop — elke wijziging (naam, volgorde, toevoegen, verwijderen) wordt direct naar Notion geschreven
-- Optimistisch updaten in UI, foutmelding bij mislukte Notion write
+**Nieuw seizoen dialog**
+- Vraagt naam → archiveert alle actieve gangen → reset volgorde → nieuw seizoen actief
 
-#### API schrijfroutes (nieuw)
-| Route | Methode | Actie |
-|---|---|---|
-| `/api/europa/gang` | POST | Gang toevoegen (naam) → nieuw heading_2 + lege tabel in Notion |
-| `/api/europa/gang/[id]` | PATCH | Gang hernoemen (naam) → update heading_2 tekst in Notion |
-| `/api/europa/gang/[id]` | DELETE | Gang verwijderen → verwijdert heading_2 + bijbehorende blokken |
-| `/api/europa/volgorde` | POST | Volgorde opslaan (array van ids) → nummers herschrijven in Notion headings |
+**Archiveer heel menu**
+- Bevestigingsdialog → DELETE alle actieve gangs parallel
 
-#### Nog te bouwen
-- `pages/api/plates.js` uitbreiden: Europa-branch parst Notion pagina i.p.v. database query
-- `pages/menu.js` uitbreiden: `EuropaMenu` component bij `restaurant === 'europa'`
-- `/api/europa/gang` schrijfroutes
-- Drag-and-drop met `@hello-pangea/dnd` of eigen simpele implementatie
+**Archief tab**
+- Gearchiveerde gangen gegroepeerd per seizoenslabel, gesorteerd nieuw→oud
+- Per gang: naam + **Heractiveer** knop → PUT `/api/europa/gang/[id]` met huidig seizoen
 
 ---
 
