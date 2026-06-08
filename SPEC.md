@@ -356,26 +356,149 @@ Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan 
 
 ---
 
-### 3d — Europa Calculator layout
+### 3d — Europa Menu pagina (bij Restaurant Europa)
 
 #### Doel
-Wanneer Restaurant Europa geselecteerd is, toont de Calculator-pagina een **tasting menu layout** in plaats van de Europizza sidebar/detail view.
+Wanneer Restaurant Europa geselecteerd is, toont de Menu-pagina een elegante lijstweergave van alle gangen in volgorde — bewerkbaar, herschikte via drag-and-drop, met realtime Notion sync.
+
+#### Notion databronnen
+- **Root pagina**: `11b0a6bb-111f-4b87-bc7f-518713a6331d` (Restaurant Europa)
+- **Plates Europa database**: child database binnen het Restaurant Europa workspace (bevat keukenreceptpagina's per gang)
+- **Structuur per gang in Notion**: heading_2 `{nr}. {naam}` → tabel met kolommen `[Ingrediënt, Netto, Eenheid, Yield%, Bruto, Prijs, Kostprijs]` → paragraph `Foodcost: € X,XX`
+- **Verkoopprijs** staat in eerste paragraph van de seizoenspagina: `Verkoopprijs € 119,00 incl. BTW · excl. BTW € 109,17 · Target 30%`
+- De **actieve seizoenspagina** is de meest recente `child_page` met "Foodcost" in de titel (bijv. `Foodcost — Spring Menu '26`)
+
+#### API: `GET /api/plates?restaurant=europa`
+Parst de actieve Foodcost-pagina en retourneert:
+```json
+{
+  "plates": [
+    {
+      "id": "<heading-block-id>",
+      "naam": "Spring Salad",
+      "nummer": 1,
+      "fc": 3.73,
+      "vk": 10.917,
+      "categorie": "Gang",
+      "ingredienten": [
+        { "naam": "Komkommer Corselli", "hoeveelheid": 20, "eenheid": "g", "yld": 70, "prijs": 8.00, "kostprijs": 0.23 }
+      ]
+    }
+  ],
+  "meta": { "vkTotaal": 109.17, "fcTotaal": 29.89, "seizoen": "Spring Menu '26" }
+}
+```
+- `fc` komt uit de `Kostprijs`-kolom (kolom 6) — pre-berekend in Notion
+- `vk` = `vkTotaal / aantal_gangen` (gelijke verdeling zolang geen per-gang VK in Notion)
+- Parsing: heading_2 → gang, heading_3 → sub-sectie (ingrediënten gaan naar dezelfde gang), table → ingrediënten, `Foodcost:` paragraph → `fc`
+
+#### Menu pagina layout (`pages/menu.js` bij `restaurant === 'europa'`)
+
+**Header**
+- Linksonder seizoenslabel (bijv. "Spring Menu '26") + knop **Nieuw seizoen** (opent inline invoerveld)
+- Seizoensnaam opgeslagen in `localStorage('era-seizoen')` + gesynchroniseerd met Notion via paginanaam
+
+**Totalen banner** (4 kaartjes bovenin)
+| Kaartje | Waarde |
+|---|---|
+| Gangen | aantal gangen |
+| FC per couvert | € som alle gang-FC |
+| Aanbevolen VK | FC_totaal / (target_fc_pct / 100) — target uit Instellingen |
+| Werkelijke VK | aanpasbaar invoerveld, default = Notion VK |
+| FC% | FC_totaal / werkelijke_VK × 100, badge groen/oranje/rood |
+
+**Gangenlijst**
+Elke gang op een rij:
+```
+[grip] [nr] [naam — inline editbaar]  [X ing.]  [€ FC]  [FC% badge]  [×]
+```
+- **Grip icoon** (⠿) links — drag-and-drop volgorde aanpassen; nieuwe volgorde schrijft nummers terug naar Notion
+- **Nummer** auto-bijgewerkt na drag
+- **Naam** inline editbaar via klik; Enter/blur → schrijft naar Notion
+- **FC** berekend uit `plate.fc` (uit Notion Kostprijs-kolom)
+- **FC% badge** = `plate.fc / (werkelijkeVK / aantalGangen) × 100`
+- **×** gang verwijderen (met bevestigingsdialog)
+
+**Gang toevoegen**
+- `+ gang toevoegen` knop onderaan lijst
+- Voert naam in via inline invoerveld
+- Maakt nieuwe heading_2 blok aan in Notion seizoenspagina + lege tabel
+
+**Gedrag**
+- Geen aparte Sync-knop — elke wijziging (naam, volgorde, toevoegen, verwijderen) wordt direct naar Notion geschreven
+- Optimistisch updaten in UI, foutmelding bij mislukte Notion write
+
+#### API schrijfroutes (nieuw)
+| Route | Methode | Actie |
+|---|---|---|
+| `/api/europa/gang` | POST | Gang toevoegen (naam) → nieuw heading_2 + lege tabel in Notion |
+| `/api/europa/gang/[id]` | PATCH | Gang hernoemen (naam) → update heading_2 tekst in Notion |
+| `/api/europa/gang/[id]` | DELETE | Gang verwijderen → verwijdert heading_2 + bijbehorende blokken |
+| `/api/europa/volgorde` | POST | Volgorde opslaan (array van ids) → nummers herschrijven in Notion headings |
+
+#### Nog te bouwen
+- `pages/api/plates.js` uitbreiden: Europa-branch parst Notion pagina i.p.v. database query
+- `pages/menu.js` uitbreiden: `EuropaMenu` component bij `restaurant === 'europa'`
+- `/api/europa/gang` schrijfroutes
+- Drag-and-drop met `@hello-pangea/dnd` of eigen simpele implementatie
+
+---
+
+### 3e — Europa Calculator pagina
+
+#### Doel
+Wanneer Restaurant Europa geselecteerd is, toont de Calculator-pagina een **tasting menu layout** — gangen uitklapbaar met bewerkbare ingrediënten, VK aanpasbaar bovenin, FC% herberekent automatisch.
 
 #### Layout
-- Header: restaurant naam, tasting menu label, seizoenslabel (bewerkbaar), Nieuw seizoen + Sync → Notion knoppen
-- Totalen banner (4 kaartjes): aantal gangen, FC per couvert totaal, VK excl. BTW totaal, FC% badge
-- Gangen in volgorde: nummer | naam | ingrediënten-count | FC per couvert | FC% badge | uitklap-icoon
-- Uitklapbaar per gang: ingrediënten tabel (Ingrediënt, Hoeveelheid, Eenheid, Prijs, FC)
-- FC% badge: groen <25%, oranje 25-30%, rood >30%
-- Add-ons sectie onderaan (placeholder)
-- Gedeelde ingrediëntendatabase (prijzen uit dezelfde `ep-prijzen` localStorage)
 
-#### Gebouwd ✅
-- `EuropaCalculator` component in `pages/index.js`
-- Conditionele render: `restaurant === 'europa'` → `EuropaCalculator`, anders bestaande Calculator
-- Seizoenslabel met inline edit, bewaard in `localStorage('era-seizoen')`
-- Totalen banner met gang-count, FC totaal, VK totaal, FC% badge
-- Gangen uitklapbaar met ingrediënten tabel
+**Header / totalen** (bovenin, altijd zichtbaar)
+- Seizoenslabel (zelfde als Menu pagina, uit `localStorage('era-seizoen')`)
+- Vier kaartjes: **Gangen** | **FC per couvert** | **Aanbevolen VK** | **Werkelijke VK** (aanpasbaar)
+- FC% badge groot: FC_totaal / werkelijkeVK × 100, kleur groen/oranje/rood
+- VK invoerveld: typen → FC% badge herberekent live; blur/Enter → slaat op in Supabase `price_overrides` (key: `era-vk`)
+
+**Gangenlijst** (uitklapbaar)
+Elke gang als kaartje:
+```
+[nr]  [naam]              [X ing.]  [€ FC]  [FC% badge]  [▼/▲]
+      ─────────────────────────────────────────────────────────
+      Ingrediënt  | Hoeveelheid | Eenheid | Yield% | Prijs  | FC
+      ─────────────────────────────────────────────────────────
+      [+ ingrediënt toevoegen]
+```
+- FC per gang = som van `kostprijs` per ingrediënt (pre-berekend uit Notion)
+- Prijs per ingrediënt: aanpasbaar inline (overschrijft Notion-waarde, opgeslagen in `ep-prijzen` localStorage net als Europizza)
+- Bij prijswijziging: FC van dat ingrediënt herberekent (`hoeveelheid / yield * prijs`), gang-FC en totaal-FC updaten live
+- Sync naar Notion via bestaande `/api/sync` route (stuurt updated kostprijs tabel terug naar de Notion keukenreceptpagina)
+
+**Kolommen ingrediëntentabel**
+| Kolom | Bron | Bewerkbaar |
+|---|---|---|
+| Ingrediënt | Notion naam | nee (voor nu) |
+| Hoeveelheid | Notion netto | ja |
+| Eenheid | Notion eenheid | ja |
+| Yield% | Notion yield | ja |
+| Prijs | Notion prijs / ep-prijzen override | ja |
+| FC | berekend | nee |
+
+**Sync → Notion**
+- Knop rechtsboven per gang: "Sync → Notion" — schrijft de bijgewerkte kostprijstabel terug naar de keukenreceptpagina in de Plates Europa database
+- Zelfde debounce-mechanisme als Europizza Calculator
+
+#### FC% badge logica
+- Per gang: `gang.fc / (werkelijkeVK / aantalGangen) × 100`
+- Totaal: `fcTotaal / werkelijkeVK × 100`
+- Groen < 25% · Oranje 25–30% · Rood > 30%
+
+#### Gebouwd (huidig, gedeeltelijk)
+- `EuropaCalculator` component in `pages/index.js` — basisstructuur aanwezig maar gebruikt verkeerde databron (probeert Notion DB query i.p.v. pagina parse)
+- Conditionele render: `restaurant === 'europa'` → `EuropaCalculator`
+
+#### Nog te bouwen / fixen
+- `pages/api/plates.js`: Europa-branch — parst Notion Foodcost-pagina, retourneert `{ plates, meta }`
+- `pages/index.js` `EuropaCalculator`: gebruik `plate.fc` (pre-berekend) i.p.v. `plateFC()`, toon `meta.seizoen`, VK-invoerveld met live FC% herberekening
+- `/api/sync` uitbreiden: Notion-schrijfroute voor Europa kostprijstabellen
+- Ingrediëntenprijzen bewerkbaar maken met live FC-herberekening
 
 ---
 
