@@ -168,52 +168,9 @@ Drie features via Supabase Realtime:
 
 ---
 
-## Fase 3 — Scan conflict melding + alias suggesties (PRIORITEIT)
+## Fase 3 — Scan meldingen systeem (PRIORITEIT)
 
-### 3a — Automatische alias suggestie (inkoop bot)
-
-#### Probleem
-De inkoop bot maakt bij een fuzzy match (>80%) automatisch een alias aan zonder bevestiging. Bij een verkeerde match (bijv. "kip dij" → "kip filet") ontstaat stille datavervuiling.
-
-#### Gewenst gedrag
-Wanneer de bot een nieuw product tegenkomt dat qua naam lijkt op een bestaand ingredient (fuzzy match >80%), wordt **niet automatisch** een alias aangemaakt. In plaats daarvan:
-
-1. Bot schrijft de suggestie naar Supabase tabel `alias_suggestions`:
-   ```
-   id, scan_naam, bestaand_naam, bestaand_page_id, score, status ('pending')
-   ```
-2. Inkoop monitor of Ingrediënten pagina toont een banner:
-   > "Is **'[scan naam]'** hetzelfde als **'[bestaand ingredient]'**? Dan voegen we een alias toe."
-3. **Ja** → alias wordt toegevoegd aan het bestaande ingredient in Notion, `status: 'accepted'`
-4. **Nee** → nieuw ingredient aangemaakt zoals normaal, `status: 'rejected'`
-5. Pending suggesties blijven zichtbaar totdat ze worden afgehandeld
-
-#### Te bouwen
-- `notion-sync.js`: bij fuzzy match → schrijf naar Supabase i.p.v. auto-alias
-- Supabase tabel `alias_suggestions` aanmaken
-- API route `POST /api/alias-suggestie` — verwerkt ja/nee beslissing
-- UI banner in Ingrediënten pagina (pages/ingredienten.js) bovenaan observaties
-- Inkoop bot `headless.js`: SUPABASE_URL + SUPABASE_ANON_KEY env vars toevoegen
-
-#### Datamodel Supabase
-```sql
-create table alias_suggestions (
-  id uuid primary key default gen_random_uuid(),
-  scan_naam text not null,
-  bestaand_naam text not null,
-  bestaand_page_id text not null,
-  score numeric not null,
-  status text default 'pending', -- 'pending' | 'accepted' | 'rejected'
-  created_at timestamptz default now()
-);
-```
-
----
-
-### 3b — Automatische deduplicatie bij import ✅ GEBOUWD
-
-#### Probleem
-De inkoop bot maakt bij elke scan een nieuw ingredient aan als de naam net iets afwijkt (bijv. gewicht of leveranciersnaam in de naam). Zo ontstaan stille dubbelen zoals "buffel mozzarella campa, 250gr" naast "buffel mozzarella campa" — zelfde product, zelfde prijs, zelfde leverancier.
+### 3a — Automatische deduplicatie bij import ✅ GEBOUWD
 
 #### Gedrag (geïmplementeerd in `src/notion-sync.js`)
 Wanneer de bot een nieuw product wil aanmaken, doorloopt `syncAll()` vier stappen:
@@ -234,19 +191,113 @@ Wanneer de bot een nieuw product wil aanmaken, doorloopt `syncAll()` vier stappe
 
 ---
 
-### 3c — Scan conflict melding (PRIORITEIT)
+### 3b — Meldingen systeem: UI + datamodel
 
-#### Probleem
-Als twee scans tegelijk lopen (bijv. na `--rescan`) of als een scan een ingredient bijwerkt dat net handmatig is aangepast, overschrijft de bot stilletjes de handmatige waarde.
+#### Doel
+Elke scanrun schrijft gestructureerde meldingen naar Supabase. De Inkoop monitor toont deze meldingen bovenaan de pagina. De navigatietab toont een badge met het aantal ongelezen meldingen.
 
-#### Gewenst gedrag
-- Bot detecteert of een ingredient in de afgelopen 30 minuten handmatig is bijgewerkt (`Laatste update` veld in Notion)
-- Zo ja: slaat de bot-update over en logt een conflict waarschuwing
-- Conflict wordt zichtbaar in de Inkoop monitor als een melding: "Bot wilde [naam] bijwerken maar er was een recente handmatige wijziging"
+---
+
+#### Vier meldingstypen
+
+**1. Groen — kleine prijswijziging (<10%), automatisch bijgewerkt**
+- Tekst: "Product herkend! **[naam]** (leverancier) — prijs bijgewerkt van €X naar €Y (+Z%). Automatisch verwerkt."
+- Geen actieknoppen — informatief
+- Wordt bij openen automatisch als gelezen gemarkeerd
+
+**2. Oranje — grote prijswijziging (>10%), actie vereist**
+- Tekst: "Product herkend! **[naam]** (leverancier) — grote prijsstijging van €X naar €Y (+Z%). Controleer of dit klopt."
+- Knoppen: **Accepteren** (status → `accepted`, prijs definitief) | **Negeren** (status → `ignored`, prijs blijft oud)
+- Blijft ongelezen totdat gebruiker een keuze maakt
+
+**3. Blauw — nieuw product gevonden**
+- Tekst: "Nieuw product gevonden! **[scan naam]** (leverancier) — nog niet in de database. Wil je dit toevoegen?"
+- Knoppen: **Bekijken** (opent Ingrediënten editor op het nieuwe product) | **Negeren** (status → `ignored`)
+- Blijft ongelezen totdat gebruiker een keuze maakt
+
+**4. Groen met link-icoon — alias herkend, automatisch samengevoegd**
+- Tekst: "Product herkend! **[scan naam]** herkend als **[bestaand ingredient]** — alias automatisch toegevoegd."
+- Geen actieknoppen — informatief
+- Wordt bij openen automatisch als gelezen gemarkeerd
+
+---
+
+#### Notificatiebadge op Inkoop monitor tab
+
+- Rode cirkel met getal rechtsbovenaan de "Inkoop monitor" tab in de navigatiebalk
+- Toont het aantal meldingen met `gelezen = false`
+- Badge verdwijnt zodra alle meldingen gelezen zijn (of geen pending oranje/blauwe meldingen meer)
+- Telt alleen meldingen van de afgelopen 7 dagen mee
+
+---
+
+#### Meldingen sectie in Inkoop monitor (pages/inkoop.js)
+
+- Bovenaan de pagina, boven de statusbalk
+- Elke melding als een kaartje met gekleurde linkerbalk (groen / oranje / blauw)
+- Kaartje bevat: meldingtype-icoon, tekst, tijdstip ("3 uur geleden"), actieknoppen indien van toepassing
+- Informatieve meldingen (groen) worden automatisch als gelezen gemarkeerd bij paginabezoek
+- Actie-meldingen (oranje/blauw) blijven staan totdat de gebruiker reageert
+- "Alles sluiten" knop bovenaan de sectie — markeert alle zichtbare meldingen als gelezen
+- Sectie verdwijnt niet als er geen meldingen zijn — toont dan: "Geen nieuwe meldingen"
+
+---
+
+#### Supabase datamodel
+
+```sql
+create table scan_meldingen (
+  id uuid primary key default gen_random_uuid(),
+  type text not null, -- 'prijs_klein' | 'prijs_groot' | 'nieuw_product' | 'alias_herkend'
+  ingredient_naam text not null,
+  leverancier text,
+  prijs_oud numeric,
+  prijs_nieuw numeric,
+  wijziging_pct numeric,
+  scan_naam text,           -- voor alias_herkend: de naam uit de factuur
+  bestaand_page_id text,    -- Notion page ID van het bestaande ingredient
+  status text default 'pending', -- 'pending' | 'accepted' | 'ignored'
+  gelezen boolean default false,
+  created_at timestamptz default now()
+);
+
+create index on scan_meldingen (gelezen, created_at desc);
+```
+
+---
+
+#### Bot-integratie (`src/notion-sync.js`)
+
+Bij elke schrijfactie schrijft `syncAll()` een rij naar `scan_meldingen`:
+
+| Situatie | Type | Status na schrijven |
+|---|---|---|
+| Prijs bijgewerkt, wijziging ≤10% | `prijs_klein` | `accepted`, `gelezen: false` |
+| Prijs bijgewerkt, wijziging >10% | `prijs_groot` | `pending`, `gelezen: false` |
+| Nieuw product aangemaakt | `nieuw_product` | `pending`, `gelezen: false` |
+| Fuzzy match → alias toegevoegd | `alias_herkend` | `accepted`, `gelezen: false` |
+
+Voor `prijs_groot` en `nieuw_product`: de prijs-update wordt uitgesteld totdat de gebruiker "Accepteren" kiest. Bij "Negeren" blijft de oude prijs staan.
+
+---
+
+#### API routes
+
+- `GET /api/meldingen` — haalt meldingen op (filter: `gelezen=false` of laatste 7 dagen), gesorteerd op `created_at desc`
+- `POST /api/meldingen/[id]/lees` — markeert melding als gelezen (`gelezen: true`)
+- `POST /api/meldingen/[id]/actie` — body: `{ actie: 'accepted' | 'ignored' }` — verwerkt keuze, markeert gelezen
+
+---
 
 #### Te bouwen
-- `notion-sync.js` `updatePriceOnly()`: check `Laatste update` voor schrijven
-- Conflicten loggen naar console én optioneel naar Supabase `scan_conflicts` tabel
+- Supabase tabel `scan_meldingen` aanmaken
+- `src/notion-sync.js`: meldingen schrijven bij elke scanactie (zie tabel boven)
+- `pages/api/meldingen/index.js` — GET route
+- `pages/api/meldingen/[id]/lees.js` — POST route
+- `pages/api/meldingen/[id]/actie.js` — POST route + Notion prijsupdate bij `accepted`
+- `pages/inkoop.js`: meldingen sectie bovenaan toevoegen
+- `pages/_app.js` of navigatiecomponent: badge ophalen via polling (elke 60s) of Supabase Realtime subscription op `scan_meldingen`
+- Inkoop bot `headless.js`: SUPABASE_URL + SUPABASE_ANON_KEY env vars toevoegen
 
 ---
 
