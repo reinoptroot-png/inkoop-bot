@@ -17,6 +17,8 @@ const settings = {
   notionDbId:      process.env.NOTION_DB_ID      || _sf.notionDbId      || 'b6258a232e6d4482b7b4f50cf449854f',
   anthropicKey:    process.env.ANTHROPIC_API_KEY || _sf.anthropicKey,
   alertThreshold:  parseInt(process.env.ALERT_THRESHOLD || '') || _sf.alertThreshold || 10,
+  supabaseUrl:     process.env.SUPABASE_URL      || _sf.supabaseUrl,
+  supabaseKey:     process.env.SUPABASE_KEY      || _sf.supabaseKey,
 };
 
 const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass: 'IMAP_PASS', anthropicKey: 'ANTHROPIC_API_KEY' };

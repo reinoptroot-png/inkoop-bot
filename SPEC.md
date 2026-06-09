@@ -305,6 +305,41 @@ Voor `prijs_groot` en `nieuw_product`: de prijs-update wordt uitgesteld totdat d
 
 ---
 
+### 3f — Dynamische leveranciersbeheer ✅
+
+#### Doel
+Leveranciers worden niet langer hardcoded bijgehouden in `src/imap-scanner.js` maar dynamisch geladen uit Supabase. Beheer via de Instellingen pagina in de webapp.
+
+#### Supabase tabel `leveranciers`
+```sql
+create table leveranciers (
+  id uuid primary key default gen_random_uuid(),
+  naam text not null,
+  email text not null,
+  restaurant text not null default 'beide',
+  actief boolean not null default true,
+  created_at timestamptz default now()
+);
+```
+- `email`: volledig adres (bijv. `finance@lindenhoff.nl`) of alleen domein (bijv. `lindenhoff.nl`)
+- `restaurant`: `'europizza'` / `'europa'` / `'beide'` — informatief, bot gebruikt alle actieve leveranciers
+- `actief`: bot laadt alleen rijen met `actief = true`
+
+#### Bot gedrag (`src/imap-scanner.js`)
+- `loadKnownSenders(settings)`: haalt actieve leveranciers op uit Supabase bij elke scan
+- Bouwt een `{ email/domein → naam }` map (lowercase)
+- Fallback op `FALLBACK_SENDERS` (hardcoded) als Supabase niet beschikbaar is
+- Benodigde env vars: `SUPABASE_URL` en `SUPABASE_KEY` (of `supabaseUrl`/`supabaseKey` in settings.json)
+
+#### Webapp UI (`pages/instellingen.js`)
+- Sectie "Leveranciers" onderaan de Instellingen pagina
+- Per leverancier: naam / e-mail of domein / restaurant badge / actief toggle / edit / verwijder
+- Inline bewerken via edit-icoon
+- "+ Leverancier" knop → inline invoerformulier
+- Toggle actief: direct opgeslagen zonder aparte opslaan-knop
+
+---
+
 ### 3c — Restaurant switcher in navigatie
 
 #### Doel

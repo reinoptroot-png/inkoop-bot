@@ -2,9 +2,10 @@ const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
+const { createClient } = require('@supabase/supabase-js');
 
-// Bekende leveranciers: volledig e-mailadres of domein → leveranciersnaam
-const KNOWN_SENDERS = {
+// Laad actieve leveranciers uit Supabase; fallback op hardcoded lijst als Supabase niet beschikbaar is.
+const FALLBACK_SENDERS = {
   'finance@lindenhoff.nl':                          'Lindenhoff',
   'lindenhoff.nl':                                  'Lindenhoff',
   'facturen@vleeschatelier.nl':                     'Vleeschatelier',
@@ -18,12 +19,30 @@ const KNOWN_SENDERS = {
   'info-aspergesamsterdam@deliver.moneybird.com':   'Asperges Amsterdam',
 };
 
-function leverancierFromEmail(address) {
+async function loadKnownSenders(settings) {
+  const url  = settings.supabaseUrl  || process.env.SUPABASE_URL;
+  const key  = settings.supabaseKey  || process.env.SUPABASE_KEY;
+  if (!url || !key) return FALLBACK_SENDERS;
+  try {
+    const sb = createClient(url, key);
+    const { data, error } = await sb.from('leveranciers').select('naam, email').eq('actief', true);
+    if (error || !data || data.length === 0) return FALLBACK_SENDERS;
+    const map = {};
+    for (const row of data) {
+      map[row.email.toLowerCase().trim()] = row.naam;
+    }
+    return map;
+  } catch {
+    return FALLBACK_SENDERS;
+  }
+}
+
+function leverancierFromEmail(address, knownSenders) {
   if (!address) return '';
   const lower = address.toLowerCase();
-  if (KNOWN_SENDERS[lower]) return KNOWN_SENDERS[lower];
+  if (knownSenders[lower]) return knownSenders[lower];
   const domain = lower.split('@')[1];
-  return (domain && KNOWN_SENDERS[domain]) || '';
+  return (domain && knownSenders[domain]) || '';
 }
 
 class ImapScanner {
@@ -207,6 +226,8 @@ ${text.substring(0, 6000)}`;
 
   async scan({ markSeen = true, lookbackDays = 7, reprocess = false, debug = false } = {}) {
     const log = debug ? (...a) => console.log(...a) : () => {};
+    const knownSenders = await loadKnownSenders(this.settings);
+    log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
     const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
     const allItems = [];
 
@@ -217,7 +238,7 @@ ${text.substring(0, 6000)}`;
         log(`[scan] Overgeslagen — geen bijlagen: "${subject}" van ${senderAddress}`);
         continue;
       }
-      const leverancier = leverancierFromEmail(senderAddress);
+      const leverancier = leverancierFromEmail(senderAddress, knownSenders);
       log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier || '(onbekend)'}"`);
       for (const att of email.attachments) {
         if (!att.contentType || !att.contentType.includes('pdf')) {
