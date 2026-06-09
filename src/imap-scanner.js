@@ -4,36 +4,34 @@ const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
 
-// Laad actieve leveranciers uit Supabase; fallback op hardcoded lijst als Supabase niet beschikbaar is.
-const FALLBACK_SENDERS = {
-  'finance@lindenhoff.nl':                          'Lindenhoff',
-  'lindenhoff.nl':                                  'Lindenhoff',
-  'facturen@vleeschatelier.nl':                     'Vleeschatelier',
-  'vleeschatelier.nl':                              'Vleeschatelier',
-  'info@thevanillafamily.com':                      'Vanilla Venture',
-  'administratie@vanillaventure.nl':                'Vanilla Venture',
-  'vanillaventure.nl':                              'Vanilla Venture',
-  'noreply@notifications.order2cash.com':           'Sligro',
-  'info@novitalia.nl':                              'Novitalia',
-  'novitalia.nl':                                   'Novitalia',
-  'info-aspergesamsterdam@deliver.moneybird.com':   'Asperges Amsterdam',
-};
-
+// Strikte whitelist: Supabase `leveranciers` (actief=true) is de ENIGE bron van
+// waarheid. Geen hardcoded fallback meer — onbekende afzenders worden genegeerd.
+// Bij ontbrekende/onbereikbare Supabase wordt er niets verwerkt (veilig).
 async function loadKnownSenders(settings) {
-  const url  = settings.supabaseUrl  || process.env.SUPABASE_URL;
-  const key  = settings.supabaseKey  || process.env.SUPABASE_KEY;
-  if (!url || !key) return FALLBACK_SENDERS;
+  const url = settings.supabaseUrl || process.env.SUPABASE_URL;
+  const key = settings.supabaseKey || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) {
+    console.warn('[scan] ⚠ Supabase niet geconfigureerd — geen leveranciers-whitelist, geen emails verwerkt.');
+    return {};
+  }
   try {
     const sb = createClient(url, key);
     const { data, error } = await sb.from('leveranciers').select('naam, email').eq('actief', true);
-    if (error || !data || data.length === 0) return FALLBACK_SENDERS;
+    if (error) {
+      console.warn('[scan] ⚠ leveranciers niet geladen:', error.message, '— geen emails verwerkt.');
+      return {};
+    }
     const map = {};
-    for (const row of data) {
-      map[row.email.toLowerCase().trim()] = row.naam;
+    for (const row of (data || [])) {
+      if (row.email) map[row.email.toLowerCase().trim()] = row.naam;
+    }
+    if (Object.keys(map).length === 0) {
+      console.warn('[scan] ⚠ Geen actieve leveranciers in de whitelist — geen emails verwerkt.');
     }
     return map;
-  } catch {
-    return FALLBACK_SENDERS;
+  } catch (e) {
+    console.warn('[scan] ⚠ Supabase fout:', e.message, '— geen emails verwerkt.');
+    return {};
   }
 }
 
@@ -234,12 +232,17 @@ ${text.substring(0, 6000)}`;
     for (const email of emails) {
       const subject = email.subject || '(geen onderwerp)';
       const senderAddress = email.from?.value?.[0]?.address || '(onbekend)';
+      // Strikte whitelist: negeer alles van afzenders die niet in Supabase staan
+      const leverancier = leverancierFromEmail(senderAddress, knownSenders);
+      if (!leverancier) {
+        log(`[scan] Genegeerd — niet in whitelist: ${senderAddress} ("${subject}")`);
+        continue;
+      }
       if (!email.attachments || email.attachments.length === 0) {
         log(`[scan] Overgeslagen — geen bijlagen: "${subject}" van ${senderAddress}`);
         continue;
       }
-      const leverancier = leverancierFromEmail(senderAddress, knownSenders);
-      log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier || '(onbekend)'}"`);
+      log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier}"`);
       for (const att of email.attachments) {
         if (!att.contentType || !att.contentType.includes('pdf')) {
           log(`[scan] Bijlage overgeslagen — geen PDF (${att.contentType || 'onbekend type'}): "${att.filename}"`);
