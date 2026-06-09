@@ -15,13 +15,21 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
   try {
     const { createClient } = require('@supabase/supabase-js');
     supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-  } catch {}
+    console.log('[melding] Supabase meldingen ingeschakeld → scan_meldingen');
+  } catch (e) {
+    console.warn('[melding] Supabase init mislukt:', e.message);
+  }
+} else {
+  // Veelvoorkomende oorzaak: SUPABASE_URL / SUPABASE_ANON_KEY ontbreken in .env.
+  // Zonder deze worden scan-meldingen NIET naar de webapp geschreven.
+  console.warn('[melding] ⚠ SUPABASE_URL/SUPABASE_ANON_KEY ontbreken — meldingen worden NIET naar de webapp geschreven. Zie .env.example.');
 }
 
 async function schrijfMelding(data) {
   if (!supabase) return;
   try {
-    await supabase.from('scan_meldingen').insert(data);
+    const { error } = await supabase.from('scan_meldingen').insert(data);
+    if (error) console.warn(`[melding] Supabase schrijffout ("${data.ingredient_naam}"):`, error.message);
   } catch (e) {
     console.warn('[melding] Supabase schrijffout:', e.message);
   }
