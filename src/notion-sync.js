@@ -199,10 +199,11 @@ class NotionSync {
             'Eenheid': { rich_text: [{ text: { content: item.eenheid || 'kg' } }] },
             'Leverancier': { rich_text: [{ text: { content: item.leverancier || '' } }] },
             'Datum': { date: { start: datum } },
-            'Source': { rich_text: [{ text: { content: 'imap' } }] }
           }
         });
-      } catch { /* history schrijffout overslaan */ }
+      } catch (e) {
+        console.error(`[saveHistory] fout bij "${item.ingredient}": ${e.message}`);
+      }
     }
   }
 
