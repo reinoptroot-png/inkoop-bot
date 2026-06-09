@@ -122,20 +122,25 @@ function isGeblokkeerdeLeverancier(leverancier) {
 const NON_FOOD_BLACKLIST = [
   // schoonmaak / poets
   'schoonmaak', 'reiniger', 'reinigings', 'ontkalk', 'ontvetter', 'allesreiniger', 'vaatwas', 'afwasmiddel',
-  'glansspoel', 'spoelglans', 'handzeep', 'zeep', 'desinfect', 'bleek', 'chloor', 'wc-', 'toiletpapier',
-  'toiletrol', 'poetsdoek', 'poetsrol', 'poetsmiddel', 'schuurmiddel', 'schuurspons', 'spons', 'dweil',
+  'glansspoel', 'spoelglans', 'handzeep', 'zeep', 'desinfect', 'bleekmiddel', 'bleekwater', 'chloor', 'wc-',
+  'toiletpapier', 'toiletrol', 'poetsdoek', 'poetsrol', 'poetsmiddel', 'schuurmiddel', 'schuurspons', 'spons', 'dweil',
   'vuilniszak', 'afvalzak', 'keukenrol', 'vetvrij papier', 'sopdoek', 'microvezel',
   // verpakking
-  'verpakking', 'bakje', 'deksel', 'beker', 'rietje', 'servet', 'aluminiumfolie', 'vershoudfolie',
-  'huishoudfolie', 'folie', 'draagtas', 'papieren zak', 'bestekzakje', 'meeneembox', 'to go', 'to-go',
+  'verpakking', 'deksel', 'rietje', 'servet', 'aluminiumfolie', 'vershoudfolie',
+  'huishoudfolie', 'plasticfolie', 'draagtas', 'papieren zak', 'bestekzakje', 'meeneembox', 'to go', 'to-go',
   'takeaway', 'foambak', 'styrofoam', 'plastic zak', 'vacuumzak', 'vacuümzak', 'karton', 'cateringbox',
   // horeca supplies / non-food
   'kaars', 'waxine', 'tandenstoker', 'cocktailprikker', 'onderzetter', 'placemat', 'menukaart', 'krijtbord',
   'handschoen', 'haarnet', 'schort', 'vaatdoek', 'theedoek', 'batterij', 'gloeilamp', 'bonrol', 'kassarol',
 ];
+// Match op WOORDGRENS-start: "folie" matcht niet in "olijfolie", maar plurals/
+// samenstellingen mét het woord als basis (sopdoeken, vuilniszakken) wél.
 function isNonFood(naam) {
   const n = (naam || '').toLowerCase();
-  return NON_FOOD_BLACKLIST.some(term => n.includes(term));
+  return NON_FOOD_BLACKLIST.some(term => {
+    const re = new RegExp('\\b' + term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return re.test(n);
+  });
 }
 
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
