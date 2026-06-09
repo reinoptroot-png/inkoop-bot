@@ -11,7 +11,14 @@ require('dotenv').config();
 const ImapScanner = require('./imap-scanner');
 const { createClient } = require('@supabase/supabase-js');
 
-const INVOICE_RE = /factuur|faktuur|pakbon|invoice|rekening|bestelbon|leverbon|vrachtbrief|bestelling|levering/i;
+const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
+// Onderwerpen die geen leveranciersfactuur zijn (aanmaningen, offertes, replies)
+const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
+// Gratis/persoonlijke e-maildomeinen — vrijwel nooit een goederenleverancier
+const PERSOONLIJKE_DOMEINEN = new Set([
+  'gmail.com', 'outlook.com', 'outlook.nl', 'hotmail.com', 'hotmail.nl', 'live.nl', 'live.com',
+  'icloud.com', 'me.com', 'yahoo.com', 'ziggo.nl', 'kpnmail.nl', 'planet.nl', 'home.nl',
+]);
 
 function naamUitAfzender(parsed) {
   const v = parsed.from?.value?.[0] || {};
@@ -60,9 +67,12 @@ function naamUitAfzender(parsed) {
     for (const email of emails) {
       const addr = (email.from?.value?.[0]?.address || '').toLowerCase();
       if (!addr || addr === '(onbekend)' || isKnown(addr)) continue;
+      const domain = addr.split('@')[1] || '';
+      if (PERSOONLIJKE_DOMEINEN.has(domain)) continue;
       const subject = email.subject || '';
-      const hasPdf = (email.attachments || []).some(a => (a.contentType || '').includes('pdf'));
-      const looksInvoice = INVOICE_RE.test(subject) || INVOICE_RE.test(email.text || '') || hasPdf;
+      if (SKIP_SUBJECT_RE.test(subject)) continue;
+      // Vereist een echte factuur/pakbon-term (een losse PDF-bijlage is te zwak signaal)
+      const looksInvoice = INVOICE_RE.test(subject) || INVOICE_RE.test(email.text || '');
       if (!looksInvoice) continue;
       if (!found[addr]) found[addr] = { naam: naamUitAfzender(email), laatste_onderwerp: subject.slice(0, 140), aantal: 0 };
       found[addr].aantal++;
