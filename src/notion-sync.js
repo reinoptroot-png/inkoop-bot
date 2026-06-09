@@ -143,6 +143,21 @@ function isNonFood(naam) {
   });
 }
 
+// Drank-blacklist: termen die een product altijd als drank markeren.
+// Vooral Franse wijntermen — diacriet-ongevoelig, op hele-woord match zodat
+// "cru" niet matcht in "crudités" en "cave" niet in onschuldige woorden.
+const DRANK_BLACKLIST = [
+  'vins', 'pirouettes', 'cuvée', 'château', 'domaine', 'cépage',
+  'millésime', 'cave', 'vignoble', 'cru',
+];
+function stripAccents(s) {
+  return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+function isDrank(naam) {
+  const n = stripAccents((naam || '').toLowerCase());
+  return DRANK_BLACKLIST.some(term => new RegExp(`\\b${stripAccents(term)}\\b`).test(n));
+}
+
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
 // blacklist (uit Supabase non_food_blacklist). Retourneert { kept, blocked }.
 function filterScanItems(items, learnedBlacklist = []) {
@@ -348,15 +363,16 @@ class NotionSync {
           const naam = item.ingredient.toLowerCase().trim();
           const cls = classified.find(c => (c.original || '').toLowerCase().trim() === naam) || {};
           const simpleName = cls.simple_name || naam;
-          const isDrank = cls.is_drank || false;
+          // Drank-blacklist overschrijft Claude: wijntermen zijn altijd drank
+          const drank = cls.is_drank || isDrank(naam);
           const categorie = cls.categorie || 'droogwaren';
 
           if (dryRun) {
             console.log(`  ✨ NIEUW   "${naam}"`);
-            console.log(`           → naam: "${simpleName}" | categorie: ${categorie} | is_drank: ${isDrank}`);
+            console.log(`           → naam: "${simpleName}" | categorie: ${categorie} | is_drank: ${drank}`);
             console.log(`           → prijs: €${item.price}/${item.eenheid} via ${item.leverancier}`);
           } else {
-            await this.createProduct({ ...item, ingredient: simpleName, isDrank, categorie });
+            await this.createProduct({ ...item, ingredient: simpleName, isDrank: drank, categorie });
           }
           results.created++;
         }
@@ -374,3 +390,5 @@ module.exports.filterScanItems = filterScanItems;
 module.exports.isNonFood = isNonFood;
 module.exports.isGeblokkeerdeLeverancier = isGeblokkeerdeLeverancier;
 module.exports.NON_FOOD_BLACKLIST = NON_FOOD_BLACKLIST;
+module.exports.isDrank = isDrank;
+module.exports.DRANK_BLACKLIST = DRANK_BLACKLIST;
