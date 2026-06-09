@@ -133,6 +133,8 @@ async function run() {
     }
   }
 
+  await notion.saveHistory(results);
+
   if (alerts.length) {
     console.log(`[inkoop-bot] ${alerts.length} grote prijswijziging(en) — wachten op bevestiging in app:`);
     alerts.forEach(a => console.log(`  ⚠ ${a.ingredient}: €${a.oldPrice} → €${a.newPrice} (${a.diff}%)`));
