@@ -4,10 +4,10 @@
 Vier tabbladen in de topbar, op elke pagina consistent:
 - **Calculator** → /
 - **Menu** → /menu
-- **Inkoop monitor** → /inkoop
+- **Dashboard** → /inkoop
 - **Recepten** → /recepten (placeholder, binnenkort)
 
-Volgorde in topbar: Calculator / Menu / Inkoop monitor / Recepten
+Volgorde in topbar: Calculator / Menu / Dashboard / Recepten
 
 ---
 
@@ -61,7 +61,7 @@ Pills: Alle / Huidig menu / Binnenkort
 
 ---
 
-## Inkoop monitor (pages/inkoop.js)
+## Dashboard (pages/inkoop.js)
 
 ### Statusbalk
 Laatste scan datum / Producten (aantal) / Leveranciers (aantal) / Alerts >5% (aantal rood) / Gerechten onder druk (aantal oranje)
@@ -194,7 +194,7 @@ Wanneer de bot een nieuw product wil aanmaken, doorloopt `syncAll()` vier stappe
 ### 3b — Meldingen systeem: UI + datamodel
 
 #### Doel
-Elke scanrun schrijft gestructureerde meldingen naar Supabase. De Inkoop monitor toont deze meldingen bovenaan de pagina. De navigatietab toont een badge met het aantal ongelezen meldingen.
+Elke scanrun schrijft gestructureerde meldingen naar Supabase. De Dashboard toont deze meldingen bovenaan de pagina. De navigatietab toont een badge met het aantal ongelezen meldingen.
 
 ---
 
@@ -343,7 +343,7 @@ create table leveranciers (
 ### 3c — Restaurant switcher in navigatie
 
 #### Doel
-Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan wisselen tussen restaurants. Menu, Calculator en Archief laden de gerechten van het geselecteerde restaurant. Ingrediënten, Inkoop monitor en Instellingen blijven gedeeld (leveranciers en inkoopprijzen zijn restaurantoverstijgend).
+Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan wisselen tussen restaurants. Menu, Calculator en Archief laden de gerechten van het geselecteerde restaurant. Ingrediënten, Dashboard en Instellingen blijven gedeeld (leveranciers en inkoopprijzen zijn restaurantoverstijgend).
 
 #### Restaurants
 | Naam | Notion DB ID | Status |
@@ -365,7 +365,7 @@ Het EP-logo linksboven in de topbar wordt een dropdown waarmee de gebruiker kan 
 | Calculator (/) | ✅ | gerechten zijn per restaurant |
 | Menu (/menu) | ✅ | statusbeheer per restaurant |
 | Archief (/archief) | ✅ | gearchiveerde gerechten per restaurant |
-| Inkoop monitor (/inkoop) | ✗ | inkoopprijzen zijn gedeeld |
+| Dashboard (/inkoop) | ✗ | inkoopprijzen zijn gedeeld |
 | Ingrediënten (/ingredienten) | ✗ | ingrediëntendatabase is gedeeld |
 | Instellingen (/instellingen) | ✗ | configuratie is gedeeld |
 
@@ -618,7 +618,7 @@ Per kaartje:
 ### Onderdeel 4 — Prijsalerts alle restaurants
 
 - Gecombineerde alertlijst van alle restaurants
-- Zelfde kaartjesformaat als Inkoop monitor stijgers/dalers
+- Zelfde kaartjesformaat als Dashboard stijgers/dalers
 - Badge met totaal aantal openstaande alerts
 - Klik op alert → navigeert naar Ingrediënten pagina van het betreffende restaurant
 
@@ -653,7 +653,7 @@ Nieuwe pagina: `pages/finance.js` — tabblad in de topbar, zichtbaar voor het a
 - Horizontaal staafdiagram — één balk per leverancier
 - Toont totaal uitgegeven (€) per leverancier over de geselecteerde periode
 - Gesorteerd hoog → laag
-- Klikbaar: klik op leverancier → filter de Inkoop monitor op die leverancier
+- Klikbaar: klik op leverancier → filter de Dashboard op die leverancier
 
 #### 3. Bar / Keuken split
 - Twee kolommen naast elkaar: **Keuken** en **Bar**
@@ -758,7 +758,7 @@ Vaste footer: `Bekijk de volledige rapportage → [app-url]`
 - Fallback: als geen adressen ingesteld → geen e-mail verstuurd, alleen console log
 
 ### Instellingen pagina (`pages/instellingen.js`)
-- Tab in de topbar: Calculator / Menu / Inkoop monitor / Ingrediënten / Recepten / **Instellingen**
+- Tab in de topbar: Calculator / Menu / Dashboard / Ingrediënten / Recepten / **Instellingen**
 - Sectie "Wekelijkse rapportage":
   - Tekstveld: "E-mailadressen (komma-gescheiden)" — bijv. `rein@europa.rest, chef@europizza.rest`
   - Opslaan knop → schrijft naar Supabase `instellingen`
@@ -951,7 +951,7 @@ coca cola, coca-cola, pepsi, fanta, sprite, 7up, fuze, ice tea, rivella, club ma
 ## Ingrediënten editor (pages/ingredienten.js)
 
 ### Navigatie
-Vijfde tabblad in topbar: Menu / Calculator / Inkoop monitor / Ingrediënten / Recepten
+Vijfde tabblad in topbar: Menu / Calculator / Dashboard / Ingrediënten / Recepten
 
 ### Structuur
 Categorieën als hoofdstructuur, inklapbaar:
@@ -1018,7 +1018,7 @@ Aparte Notion pagina onder de Europizza workspace: **"Handleiding — Europizza 
 #### 1. Introductie
 - Wat is de app en waarvoor gebruik je hem
 - Welke drie systemen samenwerken: de webapp (Vercel), Notion (database), en de inkoop bot (scanner)
-- Wie gebruikt wat: keukenteam → Calculator + Menu; inkoop → Ingrediënten + Inkoop monitor; automatisch → inkoop bot
+- Wie gebruikt wat: keukenteam → Calculator + Menu; inkoop → Ingrediënten + Dashboard; automatisch → inkoop bot
 
 #### 2. Calculator
 - Hoe open je een gerecht
@@ -1034,7 +1034,7 @@ Aparte Notion pagina onder de Europizza workspace: **"Handleiding — Europizza 
 - Hoe lees je de FC% kleuren (groen / oranje / rood)
 - Wat is de Archief sectie
 
-#### 4. Inkoop monitor
+#### 4. Dashboard
 - Wat zijn prijsalerts (>5% wijziging)
 - Hoe lees je het staafdiagram "Gerechten onder druk"
 - Hoe gebruik je de Prijzen & leveranciers tab
