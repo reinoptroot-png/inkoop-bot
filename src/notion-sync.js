@@ -108,6 +108,52 @@ ${names.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
   return parsed;
 }
 
+// ── Filters: geblokkeerde leveranciers + non-food ────────────────────────────
+
+// Leveranciers waarvan ALLE producten geweerd worden — nooit in Inkoop Prijzen.
+const GEBLOKKEERDE_LEVERANCIERS = ['hsn'];
+function isGeblokkeerdeLeverancier(leverancier) {
+  const l = (leverancier || '').toLowerCase();
+  return GEBLOKKEERDE_LEVERANCIERS.some(b => new RegExp(`\\b${b}\\b`).test(l));
+}
+
+// Non-food producten (vooral Sligro): schoonmaak/poets, verpakking, horeca supplies.
+// Bot slaat deze over bij classificatie — ze horen nooit als ingredient in Notion.
+const NON_FOOD_BLACKLIST = [
+  // schoonmaak / poets
+  'schoonmaak', 'reiniger', 'reinigings', 'ontkalk', 'ontvetter', 'allesreiniger', 'vaatwas', 'afwasmiddel',
+  'glansspoel', 'spoelglans', 'handzeep', 'zeep', 'desinfect', 'bleek', 'chloor', 'wc-', 'toiletpapier',
+  'toiletrol', 'poetsdoek', 'poetsrol', 'poetsmiddel', 'schuurmiddel', 'schuurspons', 'spons', 'dweil',
+  'vuilniszak', 'afvalzak', 'keukenrol', 'vetvrij papier', 'sopdoek', 'microvezel',
+  // verpakking
+  'verpakking', 'bakje', 'deksel', 'beker', 'rietje', 'servet', 'aluminiumfolie', 'vershoudfolie',
+  'huishoudfolie', 'folie', 'draagtas', 'papieren zak', 'bestekzakje', 'meeneembox', 'to go', 'to-go',
+  'takeaway', 'foambak', 'styrofoam', 'plastic zak', 'vacuumzak', 'vacuümzak', 'karton', 'cateringbox',
+  // horeca supplies / non-food
+  'kaars', 'waxine', 'tandenstoker', 'cocktailprikker', 'onderzetter', 'placemat', 'menukaart', 'krijtbord',
+  'handschoen', 'haarnet', 'schort', 'vaatdoek', 'theedoek', 'batterij', 'gloeilamp', 'bonrol', 'kassarol',
+];
+function isNonFood(naam) {
+  const n = (naam || '').toLowerCase();
+  return NON_FOOD_BLACKLIST.some(term => n.includes(term));
+}
+
+// Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
+// blacklist (uit Supabase non_food_blacklist). Retourneert { kept, blocked }.
+function filterScanItems(items, learnedBlacklist = []) {
+  const learnedSet = new Set((learnedBlacklist || []).map(s => (s || '').toLowerCase().trim()).filter(Boolean));
+  const kept = [];
+  const blocked = { hsn: [], nonFood: [], learned: [] };
+  for (const item of items) {
+    const naam = (item.ingredient || '').toLowerCase().trim();
+    if (isGeblokkeerdeLeverancier(item.leverancier)) { blocked.hsn.push(naam); continue; }
+    if (isNonFood(naam)) { blocked.nonFood.push(naam); continue; }
+    if (learnedSet.has(naam)) { blocked.learned.push(naam); continue; }
+    kept.push(item);
+  }
+  return { kept, blocked };
+}
+
 class NotionSync {
   constructor(settings) {
     this.client = new Client({ auth: (settings.notionToken || '').trim() });
@@ -207,8 +253,16 @@ class NotionSync {
     }
   }
 
-  async syncAll(items, { dryRun = false } = {}) {
+  async syncAll(items, { dryRun = false, learnedBlacklist = [] } = {}) {
     if (dryRun) console.log('\n⚙️  DRY-RUN — geen schrijfacties naar Notion\n');
+
+    // Weer HSN-leverancier, non-food en de lerende blacklist vóór verwerking
+    const { kept, blocked } = filterScanItems(items, learnedBlacklist);
+    const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + blocked.learned.length;
+    if (totaalGeweerd) {
+      console.log(`  🚫 ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, blacklist:${blocked.learned.length}`);
+    }
+    items = kept;
 
     const existing = await this.getAllPrices();
 
@@ -220,7 +274,7 @@ class NotionSync {
     }
 
     const toCreate = [];
-    const results = { updated: 0, created: 0, aliasAdded: 0, dryRun };
+    const results = { updated: 0, created: 0, aliasAdded: 0, geweerd: totaalGeweerd, dryRun };
 
     for (const item of items) {
       const naam = item.ingredient.toLowerCase().trim();
@@ -311,3 +365,7 @@ class NotionSync {
 }
 
 module.exports = NotionSync;
+module.exports.filterScanItems = filterScanItems;
+module.exports.isNonFood = isNonFood;
+module.exports.isGeblokkeerdeLeverancier = isGeblokkeerdeLeverancier;
+module.exports.NON_FOOD_BLACKLIST = NON_FOOD_BLACKLIST;

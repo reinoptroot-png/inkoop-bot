@@ -83,10 +83,31 @@ async function run() {
   }
 
   const notion = new NotionSync(settings);
+
+  // Lerende non-food blacklist uit Supabase laden (groeit als app ingrediënten archiveert)
+  let learnedBlacklist = [];
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('non_food_blacklist').select('naam');
+      if (!error && data) learnedBlacklist = data.map(r => r.naam);
+    } catch (e) { console.warn('[blacklist] non_food_blacklist niet geladen:', e.message); }
+  }
+
+  // HSN-leverancier, non-food en lerende blacklist weren vóór verwerking
+  const { kept, blocked } = NotionSync.filterScanItems(results, learnedBlacklist);
+  const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + blocked.learned.length;
+  if (totaalGeweerd) {
+    console.log(`[filter] ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, blacklist:${blocked.learned.length}`);
+  }
+  if (kept.length === 0) {
+    console.log('[inkoop-bot] Geen verwerkbare producten na filtering.');
+    return;
+  }
+
   const notionPrices = await notion.getAllPrices();
 
   const alerts = [];
-  for (const item of results) {
+  for (const item of kept) {
     const naam = item.ingredient.toLowerCase().trim();
     const existing = notionPrices.find(n => n.name === naam);
 
@@ -141,7 +162,7 @@ async function run() {
     }
   }
 
-  await notion.saveHistory(results);
+  await notion.saveHistory(kept);
 
   if (alerts.length) {
     console.log(`[inkoop-bot] ${alerts.length} grote prijswijziging(en) — wachten op bevestiging in app:`);
