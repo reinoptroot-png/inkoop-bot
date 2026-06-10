@@ -52,11 +52,19 @@ async function run() {
   console.log('IMAP 1 OK —', items1.length, 'producten');
 
   let items2 = [];
+  let scanner2 = null;
   if (settings.imapUser2 && settings.imapPass2) {
     console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', settings.imapHost);
-    const scanner2 = new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 });
+    scanner2 = new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 });
     items2 = await scanner2.scan({ markSeen: !dryRun, reprocess });
     console.log('IMAP 2 OK —', items2.length, 'producten');
+  }
+
+  // Nieuwe food-leverancier kandidaten → meldingen (dedup gebeurt in de helper)
+  const kandidaten = [...(scanner1.nieuweLeveranciers || []), ...(scanner2 ? (scanner2.nieuweLeveranciers || []) : [])];
+  if (kandidaten.length) {
+    const n = await ImapScanner.schrijfNieuweLeverancierMeldingen(settings.supabaseUrl, settings.supabaseKey, kandidaten);
+    if (n) console.log(`Nieuwe leverancier-meldingen aangemaakt: ${n}`);
   }
 
   // Dedupliceer over beide mailboxen

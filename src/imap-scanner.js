@@ -43,6 +43,70 @@ function leverancierFromEmail(address, knownSenders) {
   return (domain && knownSenders[domain]) || '';
 }
 
+// ── Detectie van nieuwe FOOD-leveranciers ────────────────────────────────────
+const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
+const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
+const PERSOONLIJKE_DOMEINEN = new Set([
+  'gmail.com', 'outlook.com', 'outlook.nl', 'hotmail.com', 'hotmail.nl', 'live.nl', 'live.com',
+  'icloud.com', 'me.com', 'yahoo.com', 'ziggo.nl', 'kpnmail.nl', 'planet.nl', 'home.nl',
+]);
+// Geen melding voor telecom, utilities, software/SaaS, financieel, overig non-food
+const NON_FOOD_SENDER_RE = /verzekering|\bnn\.nl\b|ziggo|odido|\bkpn\b|vodafone|t-mobile|tele2|\bsim\b|snelstart|jortt|rompslomp|\bvoys\b|\bexact\b|moneybird|easypark|riverty|yellowbrick|parkmobile|belasting|\bkvk\b|essent|eneco|vattenfall|greenchoice|vitens|waternet|\benergie\b|\bgas\b|microsoft|google|adobe|\bapple\b|spotify|hosting|webhosting|domein|drukwerk|reclame|plaatreklame|verhuur|\blease\b|software|telecom|rentokil|hobart|isero|refurbished|quatra|wairtec|bender|etine|snelstart/i;
+// Wijn/drank-only leveranciers (geen food) — geen melding
+const DRANK_SENDER_RE = /\bwijn\b|\bwine\b|wijnimport|wijnen|\bvins\b|château|chateau|cuvée|cuvee|domaine|vignoble|winestor|bolomey|sommelier|brouwerij|brewery|bierbrouw|distilleer|spirits/i;
+
+function afzenderNaam(parsed) {
+  const v = parsed.from?.value?.[0] || {};
+  if (v.name && v.name.trim() && !v.name.includes('@')) return v.name.trim();
+  const domain = (v.address || '').split('@')[1] || (v.address || '');
+  const b = domain.split('.')[0] || domain;
+  return b.charAt(0).toUpperCase() + b.slice(1);
+}
+
+// Heuristiek: lijkt deze e-mail van een (nog onbekende) FOOD-leverancier?
+// factuur/pakbon-achtig, niet persoonlijk, niet telecom/utility/software, niet wijn/drank-only.
+function lijktFoodLeverancier(parsed) {
+  const addr = (parsed.from?.value?.[0]?.address || '').toLowerCase();
+  if (!addr || addr === '(onbekend)') return false;
+  const domain = addr.split('@')[1] || '';
+  if (PERSOONLIJKE_DOMEINEN.has(domain)) return false;
+  const subject = parsed.subject || '';
+  if (SKIP_SUBJECT_RE.test(subject)) return false;
+  if (!INVOICE_RE.test(subject) && !INVOICE_RE.test(parsed.text || '')) return false;
+  const blob = `${parsed.from?.value?.[0]?.name || ''} ${addr} ${subject}`;
+  if (NON_FOOD_SENDER_RE.test(blob)) return false;
+  if (DRANK_SENDER_RE.test(blob)) return false;
+  return true;
+}
+
+// Schrijf 'nieuwe_leverancier' meldingen naar Supabase (dedup tegen whitelist + bestaande meldingen)
+async function schrijfNieuweLeverancierMeldingen(url, key, kandidaten) {
+  if (!url || !key || !kandidaten || kandidaten.length === 0) return 0;
+  try {
+    const sb = createClient(url, key);
+    const { data: levs } = await sb.from('leveranciers').select('email');
+    const whitelist = new Set((levs || []).map(l => (l.email || '').toLowerCase().trim()).filter(Boolean));
+    const { data: bestaand } = await sb.from('scan_meldingen').select('leverancier').eq('type', 'nieuwe_leverancier');
+    const alGemeld = new Set((bestaand || []).map(m => (m.leverancier || '').toLowerCase().trim()).filter(Boolean));
+    const isKnown = (e) => {
+      const d = e.split('@')[1] || '';
+      for (const w of whitelist) { if (e === w || d === w || e.endsWith('@' + w) || (d && d.endsWith(w))) return true; }
+      return false;
+    };
+    let n = 0;
+    for (const k of kandidaten) {
+      const email = (k.email || '').toLowerCase().trim();
+      if (!email || isKnown(email) || alGemeld.has(email)) continue;
+      const { error } = await sb.from('scan_meldingen').insert({
+        type: 'nieuwe_leverancier', ingredient_naam: k.naam, leverancier: email, status: 'pending', gelezen: false,
+      });
+      if (!error) { n++; alGemeld.add(email); }
+      else console.warn('[nieuwe-lev] schrijffout:', error.message);
+    }
+    return n;
+  } catch (e) { console.warn('[nieuwe-lev] fout:', e.message); return 0; }
+}
+
 class ImapScanner {
   constructor(settings) {
     this.settings = settings;
@@ -228,14 +292,22 @@ ${text.substring(0, 6000)}`;
     log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
     const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
     const allItems = [];
+    const nieuweLeveranciers = {};
 
     for (const email of emails) {
       const subject = email.subject || '(geen onderwerp)';
       const senderAddress = email.from?.value?.[0]?.address || '(onbekend)';
-      // Strikte whitelist: negeer alles van afzenders die niet in Supabase staan
+      // Strikte whitelist: negeer producten van afzenders die niet in Supabase staan.
+      // Wél detecteren: lijkt het op een nieuwe food-leverancier? → kandidaat-melding.
       const leverancier = leverancierFromEmail(senderAddress, knownSenders);
       if (!leverancier) {
-        log(`[scan] Genegeerd — niet in whitelist: ${senderAddress} ("${subject}")`);
+        if (lijktFoodLeverancier(email)) {
+          const e = senderAddress.toLowerCase();
+          if (!nieuweLeveranciers[e]) nieuweLeveranciers[e] = { email: e, naam: afzenderNaam(email) };
+          log(`[scan] Mogelijke nieuwe food-leverancier: ${senderAddress} ("${subject}")`);
+        } else {
+          log(`[scan] Genegeerd — niet in whitelist: ${senderAddress} ("${subject}")`);
+        }
         continue;
       }
       if (!email.attachments || email.attachments.length === 0) {
@@ -271,8 +343,14 @@ ${text.substring(0, 6000)}`;
 
     const result = Object.values(map);
     log(`[scan] Na deduplicatie: ${result.length} unieke producten`);
+    // Side-channel: nieuwe food-leverancier kandidaten (verandert return-type niet)
+    this.nieuweLeveranciers = Object.values(nieuweLeveranciers);
+    if (this.nieuweLeveranciers.length) log(`[scan] ${this.nieuweLeveranciers.length} mogelijke nieuwe food-leverancier(s)`);
     return result;
   }
 }
 
 module.exports = ImapScanner;
+module.exports.lijktFoodLeverancier = lijktFoodLeverancier;
+module.exports.afzenderNaam = afzenderNaam;
+module.exports.schrijfNieuweLeverancierMeldingen = schrijfNieuweLeverancierMeldingen;

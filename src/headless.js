@@ -66,16 +66,24 @@ async function run() {
 
   console.log(`[inkoop-bot] Scan gestart — ${new Date().toISOString()}${rescan ? ' (--rescan: ook gelezen emails)' : ''}`);
 
-  const scanPromises = [];
+  const scanners = [];
   if (settings.imapUser && settings.imapPass)
-    scanPromises.push(new ImapScanner({ ...settings }).scan(scanOpts));
+    scanners.push(new ImapScanner({ ...settings }));
   if (settings.imapUser2 && settings.imapPass2)
-    scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 }).scan(scanOpts));
+    scanners.push(new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 }));
   if (settings.imapUser3 && settings.imapPass3)
-    scanPromises.push(new ImapScanner({ ...settings, imapUser: settings.imapUser3, imapPass: settings.imapPass3 }).scan(scanOpts));
+    scanners.push(new ImapScanner({ ...settings, imapUser: settings.imapUser3, imapPass: settings.imapPass3 }));
 
-  const results = (await Promise.all(scanPromises)).flat();
+  const results = (await Promise.all(scanners.map(s => s.scan(scanOpts)))).flat();
   console.log(`[inkoop-bot] ${results.length} items gescand`);
+
+  // Nieuwe food-leverancier kandidaten → 'nieuwe_leverancier' meldingen
+  const kandidaten = scanners.flatMap(s => s.nieuweLeveranciers || []);
+  if (kandidaten.length) {
+    const n = await ImapScanner.schrijfNieuweLeverancierMeldingen(
+      process.env.SUPABASE_URL, process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY, kandidaten);
+    if (n) console.log(`[inkoop-bot] ${n} nieuwe leverancier-melding(en) aangemaakt`);
+  }
 
   if (results.length === 0) {
     console.log('[inkoop-bot] Geen nieuwe facturen gevonden.');
