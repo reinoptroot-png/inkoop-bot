@@ -3,7 +3,7 @@ const { simpleParser } = require('mailparser');
 const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
-const { isLightspeedDagrapport, parseDagrapport } = require('./lightspeed');
+const { isLightspeedDagrapport, extractCsvLink, parseDagrapport } = require('./lightspeed');
 
 // Strikte whitelist: Supabase `leveranciers` (actief=true) is de ENIGE bron van
 // waarheid. Geen hardcoded fallback meer — onbekende afzenders worden genegeerd.
@@ -300,15 +300,20 @@ ${text.substring(0, 6000)}`;
       const subject = email.subject || '(geen onderwerp)';
       const senderAddress = email.from?.value?.[0]?.address || '(onbekend)';
 
-      // Lightspeed dagrapport (CSV) — apart van het factuur/whitelist-pad
+      // Lightspeed dagrapport — CSV via downloadlink in de mail (apart van het factuur/whitelist-pad)
       if (isLightspeedDagrapport(email)) {
-        const csv = (email.attachments || []).find(a => /csv/i.test(a.contentType || '') || /\.csv$/i.test(a.filename || ''));
-        if (csv) {
+        const link = extractCsvLink(email);
+        if (link) {
           try {
-            const dr = parseDagrapport(csv.content.toString('utf8'));
+            const resp = await fetch(link);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const csvText = await resp.text();
+            const dr = parseDagrapport(csvText);
             dagrapporten.push(dr);
             log(`[scan] Lightspeed dagrapport: ${dr.datum || '?'} — omzet ${dr.totale_omzet ?? '?'}, ${dr.gerechten.length} gerechten`);
-          } catch (e) { log(`[scan] dagrapport parse-fout: ${e.message}`); }
+          } catch (e) { log(`[scan] dagrapport download/parse-fout: ${e.message}`); }
+        } else {
+          log(`[scan] Lightspeed-mail zonder CSV-link: "${subject}"`);
         }
         continue;
       }

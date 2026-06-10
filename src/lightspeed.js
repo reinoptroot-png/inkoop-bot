@@ -1,21 +1,33 @@
-// Lightspeed dagrapport-CSV herkenning + parsing.
-// Best-effort parser: kolommen worden op trefwoord herkend, zodat kleine
-// formaatverschillen in de Lightspeed-export geen probleem zijn.
+// Lightspeed dagrapport: herkent de mail (afzender noreply@lightspeedrestaurant.com
+// of "lightspeed"), haalt de CSV-downloadlink uit de body, en parseert het CSV.
+// Best-effort parser: trefwoord-kolomherkenning, gerechten uit de CATEGORY REVENUES sectie.
 
-function isLightspeedDagrapport(email) {
+function isLightspeed(email) {
   const from = (email.from?.value?.[0]?.address || '').toLowerCase();
   const subject = (email.subject || '').toLowerCase();
-  const blob = `${from} ${subject}`;
-  const looksLightspeed = /lightspeed|dagrapport|dagomzet|day\s?report|x-?rapport|z-?rapport|omzetrapport/i.test(blob);
-  const heeftCsv = (email.attachments || []).some(a => /csv/i.test(a.contentType || '') || /\.csv$/i.test(a.filename || ''));
-  return looksLightspeed && heeftCsv;
+  return /lightspeedrestaurant\.com|lightspeed/i.test(from)
+    || /lightspeed|dagrapport|dagomzet|omzetrapport|day\s?report/i.test(subject);
+}
+
+// Zoek een CSV-downloadlink in de e-mailbody (html of tekst)
+function extractCsvLink(email) {
+  const body = `${email.html || ''}\n${email.text || ''}`;
+  const hrefs = [...body.matchAll(/href=["']([^"']+)["']/gi)].map(m => m[1]);
+  const urls = [...body.matchAll(/https?:\/\/[^\s"'<>)]+/gi)].map(m => m[0]);
+  const all = [...hrefs, ...urls];
+  return all.find(u => /\.csv(\?|$)/i.test(u))
+    || all.find(u => /csv|export|download|report|rapport/i.test(u))
+    || null;
+}
+
+function isLightspeedDagrapport(email) {
+  return isLightspeed(email) && !!extractCsvLink(email);
 }
 
 function splitCsv(text) {
   const firstLine = (text.split(/\r?\n/).find(l => l.trim()) || '');
   const delim = (firstLine.match(/;/g) || []).length > (firstLine.match(/,/g) || []).length ? ';' : ',';
-  return text.split(/\r?\n/).filter(l => l.trim())
-    .map(l => l.split(delim).map(c => c.replace(/^"|"$/g, '').trim()));
+  return text.split(/\r?\n/).map(l => l.split(delim).map(c => c.replace(/^"|"$/g, '').trim()));
 }
 
 function toNum(s) {
@@ -30,14 +42,14 @@ function toNum(s) {
 function parseDagrapport(csvText, fallbackDatum = null) {
   const rows = splitCsv(csvText);
 
-  // Datum: ISO of dd-mm-jjjj ergens in het bestand
+  // Datum
   let datum = fallbackDatum;
   const iso = csvText.match(/(\d{4}-\d{2}-\d{2})/);
   const nl = csvText.match(/\b(\d{2})[-/](\d{2})[-/](\d{4})\b/);
   if (iso) datum = iso[1];
   else if (nl) datum = `${nl[3]}-${nl[2]}-${nl[1]}`;
 
-  // Samenvattingswaarde: zoek rij waarvan eerste cel het label matcht, neem laatste numerieke cel
+  // Samenvattingswaarde: rij waarvan eerste cel het label matcht → laatste numerieke cel
   const findVal = (re) => {
     for (const r of rows) {
       if (re.test((r[0] || '').toLowerCase())) {
@@ -46,37 +58,38 @@ function parseDagrapport(csvText, fallbackDatum = null) {
     }
     return null;
   };
-  const totale_omzet  = findVal(/totale?\s*omzet|totaal\s*omzet|omzet\s*totaal|^total/);
-  const bar_omzet     = findVal(/\bbar\b|dranken|drank/);
+  const totale_omzet  = findVal(/totale?\s*omzet|totaal\s*omzet|omzet\s*totaal|total\s*revenue|^revenue|^total\b/);
+  const bar_omzet     = findVal(/\bbar\b|dranken|drank|beverage/);
   const keuken_omzet  = findVal(/keuken|kitchen|^food\b|eten/);
   const aantal_gasten = findVal(/gasten|couverts?|covers|guests/);
   const aantal_tafels = findVal(/tafels?|tables/);
 
-  // Gerechten-tabel: header-rij met naam- + aantal-kolom
-  let hi = -1, cols = {};
-  for (let i = 0; i < rows.length; i++) {
-    const lc = rows[i].map(c => (c || '').toLowerCase());
-    const naamI = lc.findIndex(c => /product|gerecht|artikel|naam|omschrijving|item/.test(c));
-    const aantalI = lc.findIndex(c => /aantal|qty|quantity|stuks|count|verkocht/.test(c));
-    if (naamI >= 0 && aantalI >= 0) {
-      hi = i;
-      cols = { naam: naamI, aantal: aantalI,
-        prijs: lc.findIndex(c => /prijs|price|stuksprijs|unit/.test(c)),
-        totaal: lc.findIndex(c => /totaal|total|bedrag|amount|omzet/.test(c)) };
-      break;
-    }
-  }
+  // Gerechten uit de CATEGORY REVENUES sectie
   const gerechten = [];
-  if (hi >= 0) {
-    for (let i = hi + 1; i < rows.length; i++) {
+  const secIdx = rows.findIndex(r => /category\s*revenues/i.test(r.join(' ')));
+  if (secIdx >= 0) {
+    // header = eerstvolgende rij met ≥2 gevulde cellen
+    let hi = secIdx + 1;
+    while (hi < rows.length && rows[hi].filter(c => (c || '').trim()).length < 2) hi++;
+    const lc = (rows[hi] || []).map(c => (c || '').toLowerCase());
+    const hasKeywords = lc.some(c => /aantal|qty|quantity|count|prijs|price|totaal|total|amount|revenue|omzet/.test(c));
+    const cNaam   = hasKeywords ? Math.max(0, lc.findIndex(c => /category|categorie|naam|name|omschrijving|product/.test(c))) : 0;
+    let cAantal   = hasKeywords ? lc.findIndex(c => /aantal|qty|quantity|count|verkocht/.test(c)) : 1;
+    let cPrijs    = hasKeywords ? lc.findIndex(c => /prijs|price|unit|gemiddeld|avg/.test(c)) : 2;
+    let cTotaal   = hasKeywords ? lc.findIndex(c => /totaal|total|bedrag|amount|revenue|omzet/.test(c)) : 3;
+    const dataStart = hasKeywords ? hi + 1 : hi;
+    for (let i = dataStart; i < rows.length; i++) {
       const r = rows[i];
-      const naam = (r[cols.naam] || '').trim();
-      const aantal = toNum(r[cols.aantal]);
-      if (!naam || aantal == null) continue;
+      const joined = r.join(' ').trim();
+      if (!joined) break;                                                            // lege rij = einde sectie
+      if (/^[A-Z][A-Z &\-]{4,}$/.test(joined) && r.filter(c => (c || '').trim()).length <= 2) break; // nieuwe sectie
+      const naam = (r[cNaam] || '').trim();
+      if (!naam || /category|categorie|total/i.test(naam)) continue;
       gerechten.push({
-        naam, aantal,
-        prijs: cols.prijs >= 0 ? toNum(r[cols.prijs]) : null,
-        totaal: cols.totaal >= 0 ? toNum(r[cols.totaal]) : null,
+        naam,
+        aantal: cAantal >= 0 ? toNum(r[cAantal]) : null,
+        prijs:  cPrijs  >= 0 ? toNum(r[cPrijs])  : null,
+        totaal: cTotaal >= 0 ? toNum(r[cTotaal]) : null,
       });
     }
   }
@@ -84,4 +97,4 @@ function parseDagrapport(csvText, fallbackDatum = null) {
   return { datum, totale_omzet, bar_omzet, keuken_omzet, aantal_gasten, aantal_tafels, gerechten };
 }
 
-module.exports = { isLightspeedDagrapport, parseDagrapport };
+module.exports = { isLightspeedDagrapport, extractCsvLink, parseDagrapport };
