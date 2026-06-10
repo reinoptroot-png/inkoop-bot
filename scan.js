@@ -1,8 +1,22 @@
 #!/usr/bin/env node
 const ImapScanner = require('./src/imap-scanner');
 const NotionSync = require('./src/notion-sync');
+const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const fs = require('fs');
+
+// Lerende non-food blacklist laden (zelfde bron als headless.js).
+// Bij ontbrekende/onbereikbare Supabase → [], zodat HSN + NON_FOOD_BLACKLIST
+// (die in syncAll zelf zitten) gewoon blijven werken.
+async function loadLearnedBlacklist(settings) {
+  if (!settings.supabaseUrl || !settings.supabaseKey) return [];
+  try {
+    const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+    const { data, error } = await sb.from('non_food_blacklist').select('naam');
+    if (error) { console.warn('[blacklist] niet geladen:', error.message); return []; }
+    return (data || []).map(r => r.naam);
+  } catch (e) { console.warn('[blacklist] fout:', e.message); return []; }
+}
 
 let _sf = {};
 try { _sf = JSON.parse(fs.readFileSync(path.join(__dirname, 'settings.json'), 'utf8')); } catch {}
@@ -73,8 +87,10 @@ async function run() {
     items.forEach(i => console.log(`  • ${i.ingredient} — €${i.price}/${i.eenheid} (${i.leverancier})`));
   }
 
+  const learnedBlacklist = await loadLearnedBlacklist(settings);
+  if (learnedBlacklist.length) console.log('Lerende blacklist:', learnedBlacklist.length, 'namen geladen');
   const notion = new NotionSync(settings);
-  const result = await notion.syncAll(items, { dryRun });
+  const result = await notion.syncAll(items, { dryRun, learnedBlacklist });
 
   console.log('\n--- Resultaat ---');
   console.log(`  Bijgewerkt : ${result.updated}`);
