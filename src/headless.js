@@ -85,6 +85,21 @@ async function run() {
     if (n) console.log(`[inkoop-bot] ${n} nieuwe leverancier-melding(en) aangemaakt`);
   }
 
+  // Lightspeed dagrapporten → Supabase (ook als er geen facturen zijn)
+  const dagrapporten = scanners.flatMap(s => s.dagrapporten || []);
+  if (dagrapporten.length && supabase) {
+    for (const dr of dagrapporten) {
+      if (!dr.datum) { console.warn('[dagrapport] geen datum gevonden — overgeslagen'); continue; }
+      const { error } = await supabase.from('dagrapport').upsert({
+        datum: dr.datum, restaurant: 'europizza',
+        totale_omzet: dr.totale_omzet, bar_omzet: dr.bar_omzet, keuken_omzet: dr.keuken_omzet,
+        aantal_gasten: dr.aantal_gasten, aantal_tafels: dr.aantal_tafels, gerechten: dr.gerechten,
+      }, { onConflict: 'datum,restaurant' });
+      if (error) console.warn('[dagrapport] schrijffout:', error.message);
+      else console.log(`[inkoop-bot] dagrapport ${dr.datum} opgeslagen (${dr.gerechten.length} gerechten)`);
+    }
+  }
+
   if (results.length === 0) {
     console.log('[inkoop-bot] Geen nieuwe facturen gevonden.');
     return;

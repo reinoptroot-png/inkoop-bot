@@ -67,6 +67,21 @@ async function run() {
     if (n) console.log(`Nieuwe leverancier-meldingen aangemaakt: ${n}`);
   }
 
+  // Lightspeed dagrapporten → Supabase (ook als er geen facturen zijn)
+  const dagrapporten = [...(scanner1.dagrapporten || []), ...(scanner2 ? (scanner2.dagrapporten || []) : [])];
+  if (dagrapporten.length && settings.supabaseUrl && settings.supabaseKey) {
+    const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+    for (const dr of dagrapporten) {
+      if (!dr.datum) { console.warn('[dagrapport] geen datum — overgeslagen'); continue; }
+      const { error } = await sb.from('dagrapport').upsert({
+        datum: dr.datum, restaurant: 'europizza',
+        totale_omzet: dr.totale_omzet, bar_omzet: dr.bar_omzet, keuken_omzet: dr.keuken_omzet,
+        aantal_gasten: dr.aantal_gasten, aantal_tafels: dr.aantal_tafels, gerechten: dr.gerechten,
+      }, { onConflict: 'datum,restaurant' });
+      console.log(error ? `[dagrapport] schrijffout: ${error.message}` : `dagrapport ${dr.datum} opgeslagen (${dr.gerechten.length} gerechten)`);
+    }
+  }
+
   // Dedupliceer over beide mailboxen
   const map = {};
   for (const item of [...items1, ...items2]) {
