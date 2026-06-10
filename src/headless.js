@@ -140,7 +140,7 @@ async function run() {
         console.log(`  ⚠ GROOT: "${naam}" €${existing.price} → €${item.price} (${diff.toFixed(1)}%) — wacht op bevestiging`);
       } else {
         // Kleine wijziging: meteen bijwerken
-        await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier);
+        await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier, existing.leverancier);
         if (pctAbs > 0) {
           await schrijfMelding({
             type: 'prijs_klein',

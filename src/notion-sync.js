@@ -208,12 +208,15 @@ class NotionSync {
     return results;
   }
 
-  async updatePriceOnly(pageId, price, leverancier) {
+  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '') {
     const today = new Date().toISOString().split('T')[0];
     const props = {
       'Kostprijs': { number: price },
-      'Leverancier': { rich_text: [{ text: { content: leverancier || '' } }] },
     };
+    // Leverancier alleen invullen als het veld nog leeg is (bestaande waarde niet overschrijven)
+    if ((leverancier || '').trim() && !(bestaandeLeverancier || '').trim()) {
+      props['Leverancier'] = { rich_text: [{ text: { content: leverancier.trim() } }] };
+    }
     // Probeer 'Laatste update' te zetten (veld hoeft niet te bestaan)
     try {
       await this.client.pages.update({ page_id: pageId, properties: { ...props, 'Laatste update': { date: { start: today } } } });
@@ -305,7 +308,7 @@ class NotionSync {
         if (dryRun) {
           console.log(`  ✏️  UPDATE  "${naam}"  was €${exact.price ?? '?'} → €${item.price}  (${item.leverancier})`);
         } else {
-          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier);
+          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier, exact.leverancier);
         }
         results.updated++;
         continue;
@@ -334,7 +337,7 @@ class NotionSync {
           console.log(`  🔗 ALIAS   "${naam}" → "${fuzzy.match.name}" (${pct}% match) — alias toegevoegd, prijs bijgewerkt`);
         } else {
           await this.addAlias(fuzzy.match.pageId, fuzzy.match.aliassen, naam);
-          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier);
+          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier, fuzzy.match.leverancier);
           nameMap[naam] = fuzzy.match;
         }
         results.aliasAdded++;
