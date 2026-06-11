@@ -42,49 +42,49 @@ function toNum(s) {
 function parseDagrapport(csvText, fallbackDatum = null) {
   const rows = splitCsv(csvText);
 
-  // Datum
+  // Datum: ISO, dd-mm-jjjj of d-m-jj (Lightspeed gebruikt "9-6-26")
   let datum = fallbackDatum;
   const iso = csvText.match(/(\d{4}-\d{2}-\d{2})/);
-  const nl = csvText.match(/\b(\d{2})[-/](\d{2})[-/](\d{4})\b/);
+  const dmy4 = csvText.match(/\b(\d{2})[-/](\d{2})[-/](\d{4})\b/);
+  const dmy2 = csvText.match(/\b(\d{1,2})-(\d{1,2})-(\d{2})\b/);
+  const pad = n => String(n).padStart(2, '0');
   if (iso) datum = iso[1];
-  else if (nl) datum = `${nl[3]}-${nl[2]}-${nl[1]}`;
+  else if (dmy4) datum = `${dmy4[3]}-${dmy4[2]}-${dmy4[1]}`;
+  else if (dmy2) datum = `20${dmy2[3]}-${pad(dmy2[2])}-${pad(dmy2[1])}`;
 
-  // Samenvattingswaarde: rij waarvan eerste cel het label matcht → laatste numerieke cel
+  // Samenvattingswaarde: rij waarvan eerste cel het label matcht → EERSTE numerieke cel
+  // (Lightspeed zet de waarde in kolom 1; latere cellen zijn "(53.81 avg)" e.d.)
   const findVal = (re) => {
     for (const r of rows) {
       if (re.test((r[0] || '').toLowerCase())) {
-        for (let i = r.length - 1; i >= 1; i--) { const n = toNum(r[i]); if (n != null) return n; }
+        for (let i = 1; i < r.length; i++) { const n = toNum(r[i]); if (n != null) return n; }
       }
     }
     return null;
   };
-  const totale_omzet  = findVal(/totale?\s*omzet|totaal\s*omzet|omzet\s*totaal|total\s*revenue|^revenue|^total\b/);
-  const bar_omzet     = findVal(/\bbar\b|dranken|drank|beverage/);
-  const keuken_omzet  = findVal(/keuken|kitchen|^food\b|eten/);
-  const aantal_gasten = findVal(/gasten|couverts?|covers|guests/);
-  const aantal_tafels = findVal(/tafels?|tables/);
+  const totale_omzet  = findVal(/^total\s*revenue|totale?\s*omzet|gross\s*sales/);
+  const bar_omzet     = findVal(/^bar\s*revenue|\bbar\b|dranken|beverage/);
+  const keuken_omzet  = findVal(/^restaurant\s*revenue|keuken|kitchen/);
+  const aantal_gasten = findVal(/^customers|gasten|couverts?|covers|guests/);
+  const aantal_tafels = findVal(/^tables?\s*served|tafels?|^tables/);
 
-  // Gerechten uit de CATEGORY REVENUES sectie
+  // Gerechten uit de CATEGORY REVENUES sectie: per-gerecht = rijen met gevulde PRODUCT-kolom
   const gerechten = [];
   const secIdx = rows.findIndex(r => /category\s*revenues/i.test(r.join(' ')));
   if (secIdx >= 0) {
-    // header = eerstvolgende rij met ≥2 gevulde cellen
     let hi = secIdx + 1;
-    while (hi < rows.length && rows[hi].filter(c => (c || '').trim()).length < 2) hi++;
-    const lc = (rows[hi] || []).map(c => (c || '').toLowerCase());
-    const hasKeywords = lc.some(c => /aantal|qty|quantity|count|prijs|price|totaal|total|amount|revenue|omzet/.test(c));
-    const cNaam   = hasKeywords ? Math.max(0, lc.findIndex(c => /category|categorie|naam|name|omschrijving|product/.test(c))) : 0;
-    let cAantal   = hasKeywords ? lc.findIndex(c => /aantal|qty|quantity|count|verkocht/.test(c)) : 1;
-    let cPrijs    = hasKeywords ? lc.findIndex(c => /prijs|price|unit|gemiddeld|avg/.test(c)) : 2;
-    let cTotaal   = hasKeywords ? lc.findIndex(c => /totaal|total|bedrag|amount|revenue|omzet/.test(c)) : 3;
-    const dataStart = hasKeywords ? hi + 1 : hi;
-    for (let i = dataStart; i < rows.length; i++) {
+    while (hi < rows.length && !rows[hi].some(c => /product|category/i.test(c || ''))) hi++;
+    const lc = (rows[hi] || []).map(c => (c || '').toLowerCase().trim());
+    const findCol = (...res) => { for (const re of res) { const i = lc.findIndex(c => re.test(c)); if (i >= 0) return i; } return -1; };
+    const cNaam   = findCol(/^product$/, /product/, /gerecht|artikel|omschrijving/, /^naam$|^name$/);
+    const cAantal = findCol(/^#$/, /^aantal$|qty|quantity|count|verkocht/);
+    const cPrijs  = findCol(/^price$/, /prijs|price|unit/);
+    const cTotaal = findCol(/^total$/, /^totaal$/, /bedrag|amount/);
+    for (let i = hi + 1; i < rows.length; i++) {
       const r = rows[i];
-      const joined = r.join(' ').trim();
-      if (!joined) break;                                                            // lege rij = einde sectie
-      if (/^[A-Z][A-Z &\-]{4,}$/.test(joined) && r.filter(c => (c || '').trim()).length <= 2) break; // nieuwe sectie
-      const naam = (r[cNaam] || '').trim();
-      if (!naam || /category|categorie|total/i.test(naam)) continue;
+      if (!r.join('').trim()) break;                                  // lege rij = einde sectie
+      const naam = (cNaam >= 0 ? r[cNaam] : '').trim();               // category-aggregaatrijen hebben lege PRODUCT-cel
+      if (!naam || /^total$/i.test(naam)) continue;
       gerechten.push({
         naam,
         aantal: cAantal >= 0 ? toNum(r[cAantal]) : null,
