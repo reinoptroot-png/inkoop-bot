@@ -248,7 +248,7 @@ ${text.substring(0, 6000)}`;
         },
         body: JSON.stringify({
           model: 'claude-opus-4-5',
-          max_tokens: 2000,
+          max_tokens: 8000, // ruim genoeg voor lange facturen met alle extra velden per regel
           messages: [{ role: 'user', content: prompt }]
         })
       });
