@@ -202,6 +202,31 @@ function collapseDatumVarianten(items) {
   return { hoofdItems: [...perBasis.values()], historieItems };
 }
 
+// Bouw de volledige raw-data regel uit ALLES wat de leverancier op de factuur
+// meestuurt (alleen velden die de parser daadwerkelijk vond). Wordt naar de
+// Notion `Raw data` property geschreven bij elke scan.
+function bouwRawData(item) {
+  if (!item) return '';
+  const v = [];
+  const add = (label, val) => { if (val != null && String(val).trim() !== '') v.push(`${label}: ${String(val).trim()}`); };
+  add('leverancier', item.leverancier);
+  add('artikelnr', item.artikelnummer);
+  add('barcode', item.barcode);
+  add('omschrijving', item.omschrijving);
+  add('gewicht', item.gewicht);
+  add('verpakking', item.verpakking);
+  add('eenheid', item.eenheid);
+  add('prijs', item.price != null ? `€ ${Number(item.price).toFixed(2)}` : null);
+  add('btw', item.btw);
+  add('factuurnr', item.factuurnummer);
+  add('ordernr', item.ordernummer);
+  add('herkomst', item.herkomst);
+  add('kwaliteitsklasse', item.kwaliteitsklasse);
+  add('temperatuur', item.temperatuur);
+  add('min. bestelling', item.min_bestelling);
+  return v.join(' · ');
+}
+
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
 // blacklist (uit Supabase non_food_blacklist). Retourneert { kept, blocked }.
 function filterScanItems(items, learnedBlacklist = []) {
@@ -252,7 +277,7 @@ class NotionSync {
     return results;
   }
 
-  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '') {
+  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '') {
     const today = new Date().toISOString().split('T')[0];
     const props = {
       'Kostprijs': { number: price },
@@ -261,9 +286,11 @@ class NotionSync {
     if ((leverancier || '').trim() && !(bestaandeLeverancier || '').trim()) {
       props['Leverancier'] = { rich_text: [{ text: { content: leverancier.trim() } }] };
     }
-    // Probeer 'Laatste update' te zetten (veld hoeft niet te bestaan)
+    // Probeer 'Laatste update' + 'Raw data' te zetten (velden hoeven niet te bestaan)
+    const extra = { ...props, 'Laatste update': { date: { start: today } } };
+    if (rawData) extra['Raw data'] = { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] };
     try {
-      await this.client.pages.update({ page_id: pageId, properties: { ...props, 'Laatste update': { date: { start: today } } } });
+      await this.client.pages.update({ page_id: pageId, properties: extra });
     } catch {
       await this.client.pages.update({ page_id: pageId, properties: props });
     }
@@ -287,12 +314,14 @@ class NotionSync {
       'Leverancier': { rich_text: [{ text: { content: item.leverancier || '' } }] },
     };
     // Optionele velden — alleen toevoegen als ze beschikbaar zijn in het schema
+    const rawData = bouwRawData(item);
     try {
       await this.client.pages.create({ parent: { database_id: this.dbId }, properties: {
         ...props,
         'Is drank': { checkbox: item.isDrank || false },
         'Categorie': { select: { name: item.categorie || 'droogwaren' } },
-        'Laatste update': { date: { start: today } }
+        'Laatste update': { date: { start: today } },
+        ...(rawData ? { 'Raw data': { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] } } : {})
       }});
     } catch {
       // Fallback zonder extra velden als schema ze niet heeft
@@ -355,7 +384,7 @@ class NotionSync {
         if (dryRun) {
           console.log(`  ✏️  UPDATE  "${naam}"  was €${exact.price ?? '?'} → €${item.price}  (${item.leverancier})`);
         } else {
-          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier, exact.leverancier);
+          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier, exact.leverancier, bouwRawData(item));
         }
         results.updated++;
         continue;
@@ -384,7 +413,7 @@ class NotionSync {
           console.log(`  🔗 ALIAS   "${naam}" → "${fuzzy.match.name}" (${pct}% match) — alias toegevoegd, prijs bijgewerkt`);
         } else {
           await this.addAlias(fuzzy.match.pageId, fuzzy.match.aliassen, naam);
-          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier, fuzzy.match.leverancier);
+          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier, fuzzy.match.leverancier, bouwRawData(item));
           nameMap[naam] = fuzzy.match;
         }
         results.aliasAdded++;
@@ -445,3 +474,4 @@ module.exports.DRANK_BLACKLIST = DRANK_BLACKLIST;
 module.exports.stripDatum = stripDatum;
 module.exports.parseDatumUitNaam = parseDatumUitNaam;
 module.exports.collapseDatumVarianten = collapseDatumVarianten;
+module.exports.bouwRawData = bouwRawData;

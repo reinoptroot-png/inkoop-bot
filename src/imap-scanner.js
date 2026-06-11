@@ -217,7 +217,12 @@ Hieronder staat de tekst van een factuur of pakbon. Extraheer alle ingrediënten
 
 Retourneer ALLEEN een JSON array, geen uitleg, geen markdown backticks. Formaat:
 [
-  { "ingredient": "naam van het product", "price": 12.50, "eenheid": "kg" },
+  {
+    "ingredient": "naam van het product", "price": 12.50, "eenheid": "kg",
+    "artikelnummer": "...", "barcode": "...", "omschrijving": "...", "gewicht": "...",
+    "verpakking": "...", "btw": "...", "factuurnummer": "...", "ordernummer": "...",
+    "herkomst": "...", "kwaliteitsklasse": "...", "temperatuur": "...", "min_bestelling": "..."
+  },
   ...
 ]
 
@@ -227,6 +232,8 @@ Regels:
 - "eenheid": de eenheid (kg, liter, stuk, etc.)
 - Als de prijs per doos/krat is, bereken dan de prijs per kg/stuk als dat mogelijk is
 - Sla producten over waarbij je de eenheidsprijs niet kunt bepalen
+- Vul de EXTRA velden (artikelnummer, barcode, omschrijving, gewicht, verpakking, btw, factuurnummer, ordernummer, herkomst/land van herkomst, kwaliteitsklasse, temperatuur, min_bestelling) ALLEEN in als ze daadwerkelijk op de factuur staan; laat een veld weg of zet het op null als het er niet staat. Verzin niets.
+- factuurnummer en ordernummer gelden voor de hele factuur — neem ze bij elk item op als ze ergens op de factuur staan.
 
 Factuur tekst:
 ${text.substring(0, 6000)}`;
