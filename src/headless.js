@@ -111,12 +111,24 @@ async function run() {
     }
   }
 
-  if (results.length === 0) {
-    console.log('[inkoop-bot] Geen nieuwe facturen gevonden.');
-    return;
+  const notion = new NotionSync(settings);
+
+  // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen). Draait bij
+  // elke scan, ook als er geen nieuwe facturen zijn (vangt handmatige edits mee).
+  async function spiegelNaarSupabase() {
+    if (!supabase) return;
+    try {
+      const m = await notion.mirrorNaarSupabase(supabase);
+      if (m?.error) console.warn('[mirror] Supabase niet bijgewerkt:', m.error);
+      else if (m?.count != null) console.log(`[inkoop-bot] ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
+    } catch (e) { console.warn('[mirror] fout:', e.message); }
   }
 
-  const notion = new NotionSync(settings);
+  if (results.length === 0) {
+    console.log('[inkoop-bot] Geen nieuwe facturen gevonden.');
+    await spiegelNaarSupabase();
+    return;
+  }
 
   // Lerende non-food blacklist uit Supabase laden (groeit als app ingrediënten archiveert)
   let learnedBlacklist = [];
@@ -203,6 +215,7 @@ async function run() {
   }
 
   await notion.saveHistory(historieItems);
+  await spiegelNaarSupabase();
 
   if (alerts.length) {
     console.log(`[inkoop-bot] ${alerts.length} grote prijswijziging(en) — wachten op bevestiging in app:`);

@@ -125,6 +125,15 @@ async function run() {
   const notion = new NotionSync(settings);
   const result = await notion.syncAll(items, { dryRun, learnedBlacklist });
 
+  // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen)
+  if (!dryRun && settings.supabaseUrl && settings.supabaseKey) {
+    try {
+      const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+      const m = await notion.mirrorNaarSupabase(sb);
+      if (m?.count != null) console.log(`  ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
+    } catch (e) { console.warn('[mirror] fout:', e.message); }
+  }
+
   console.log('\n--- Resultaat ---');
   console.log(`  Bijgewerkt : ${result.updated}`);
   console.log(`  Alias match: ${result.aliasAdded}`);

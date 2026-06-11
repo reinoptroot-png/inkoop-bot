@@ -277,6 +277,59 @@ class NotionSync {
     return results;
   }
 
+  // Spiegel ALLE (niet-gearchiveerde) Notion-ingrediënten naar Supabase
+  // `inkoop_prijzen`. Notion blijft bron van waarheid; Supabase is de read-cache
+  // voor /api/ingredienten. Rijen die niet meer in Notion staan worden verwijderd.
+  async mirrorNaarSupabase(supabase) {
+    if (!supabase) return { skipped: true };
+    const runTs = new Date().toISOString();
+    const rows = [];
+    let cursor;
+    do {
+      const r = await this.client.databases.query({ database_id: this.dbId, start_cursor: cursor, page_size: 100 });
+      for (const page of r.results) {
+        if (page.archived) continue;
+        const props = page.properties;
+        const naam = props['Ingredient']?.title?.[0]?.plain_text || '';
+        if (!naam) continue;
+        const variantRaw = props['Variant']?.rich_text?.[0]?.plain_text || '';
+        const yieldMatch = variantRaw.match(/yield:(\d+)(gram|stuk|ml)/);
+        const seizoenMatch = variantRaw.match(/seizoen:(.+?)(?:\n|$)/);
+        const details_variant = variantRaw.replace(/yield:\d+(?:gram|stuk|ml)\n?/, '').replace(/seizoen:.+?(?:\n|$)/, '').trim();
+        rows.push({
+          id: page.id,
+          naam,
+          leverancier: props['Leverancier']?.rich_text?.[0]?.plain_text || '',
+          kostprijs: props['Kostprijs']?.number ?? null,
+          eenheid: props['Eenheid']?.rich_text?.[0]?.plain_text || '',
+          inkoopeenheid: props['Inkoopeenheid']?.rich_text?.[0]?.plain_text || '',
+          yield_pct: yieldMatch ? yieldMatch[1] : '',
+          yield_eenheid: yieldMatch ? yieldMatch[2] : 'gram',
+          categorie: props['Categorie']?.select?.name || '',
+          aliassen: props['Aliassen']?.rich_text?.[0]?.plain_text || '',
+          details_variant,
+          seizoen: seizoenMatch ? seizoenMatch[1].trim() : '',
+          is_drank: props['Is drank']?.checkbox || false,
+          raw_data: props['Raw data']?.rich_text?.[0]?.plain_text || '',
+          laatste_update: props['Laatste update']?.last_edited_time || page.last_edited_time || null,
+          updated_at: runTs,
+        });
+      }
+      cursor = r.has_more ? r.next_cursor : undefined;
+    } while (cursor);
+
+    for (let i = 0; i < rows.length; i += 100) {
+      const { error } = await supabase.from('inkoop_prijzen').upsert(rows.slice(i, i + 100), { onConflict: 'id' });
+      if (error) { console.warn('[mirror] upsert fout:', error.message); return { error: error.message }; }
+    }
+    // Prune: alles wat deze run niet is bijgewerkt = niet meer in Notion → weg
+    if (rows.length) {
+      const { error } = await supabase.from('inkoop_prijzen').delete().lt('updated_at', runTs);
+      if (error) console.warn('[mirror] prune fout:', error.message);
+    }
+    return { count: rows.length };
+  }
+
   async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '') {
     const today = new Date().toISOString().split('T')[0];
     const props = {
