@@ -158,6 +158,50 @@ function isDrank(naam) {
   return DRANK_BLACKLIST.some(term => new RegExp(`\\b${stripAccents(term)}\\b`).test(n));
 }
 
+// ── Datum-varianten in productnamen ──────────────────────────────────────────
+// Eén factuur (bijv. Asperges Amsterdam) kan hetzelfde product op meerdere
+// leverdatums bevatten: "asperges aa ongeschild 2-6", "asperges aa ongeschild 5-6".
+// Dat is hetzelfde ingredient op verschillende datums.
+
+// Strip een achtervoegsel-datum (d-m, d-m-jj, dd/mm) → basisnaam.
+function stripDatum(naam) {
+  return String(naam || '').replace(/\s+\d{1,2}[-/]\d{1,2}(?:[-/]\d{2,4})?\s*$/i, '').trim();
+}
+
+// Lees de datum uit het naam-achtervoegsel → ISO (YYYY-MM-DD), of null. Formaat
+// d-m (Nederlands: "2-6" = 2 juni); jaartal valt terug op het huidige jaar.
+function parseDatumUitNaam(naam) {
+  const m = String(naam || '').match(/(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?\s*$/);
+  if (!m) return null;
+  const dag = parseInt(m[1], 10), maand = parseInt(m[2], 10);
+  if (dag < 1 || dag > 31 || maand < 1 || maand > 12) return null;
+  let jaar = m[3] ? parseInt(m[3], 10) : new Date().getFullYear();
+  if (jaar < 100) jaar += 2000;
+  const pad = n => String(n).padStart(2, '0');
+  return `${jaar}-${pad(maand)}-${pad(dag)}`;
+}
+
+// Voeg datum-varianten samen. Retourneert:
+//  - hoofdItems:    één item per basisnaam, met de prijs van de MEEST RECENTE datum
+//                   (voor de Inkoop Prijzen entry — géén losse entry per datum).
+//  - historieItems: élke variant met basisnaam + eigen datum (voor de Inkoop
+//                   Geschiedenis — aparte stippen in de prijsgrafiek).
+function collapseDatumVarianten(items) {
+  const vandaag = new Date().toISOString().split('T')[0];
+  const historieItems = (items || []).map(it => ({
+    ...it,
+    ingredient: stripDatum(it.ingredient),
+    datum: parseDatumUitNaam(it.ingredient) || vandaag,
+  }));
+  const perBasis = new Map();
+  for (const it of historieItems) {
+    const key = it.ingredient.toLowerCase().trim();
+    const cur = perBasis.get(key);
+    if (!cur || it.datum >= cur.datum) perBasis.set(key, it); // laatste datum = hoofdprijs
+  }
+  return { hoofdItems: [...perBasis.values()], historieItems };
+}
+
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
 // blacklist (uit Supabase non_food_blacklist). Retourneert { kept, blocked }.
 function filterScanItems(items, learnedBlacklist = []) {
@@ -257,7 +301,7 @@ class NotionSync {
   }
 
   async saveHistory(items) {
-    const datum = new Date().toISOString().split('T')[0];
+    const vandaag = new Date().toISOString().split('T')[0];
     for (const item of items) {
       try {
         await this.client.pages.create({
@@ -267,7 +311,7 @@ class NotionSync {
             'Prijs': { number: item.price },
             'Eenheid': { rich_text: [{ text: { content: item.eenheid || 'kg' } }] },
             'Leverancier': { rich_text: [{ text: { content: item.leverancier || '' } }] },
-            'Datum': { date: { start: datum } },
+            'Datum': { date: { start: item.datum || vandaag } },
           }
         });
       } catch (e) {
@@ -285,7 +329,10 @@ class NotionSync {
     if (totaalGeweerd) {
       console.log(`  🚫 ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, blacklist:${blocked.learned.length}`);
     }
-    items = kept;
+    // Datum-varianten samenvoegen: één entry per basisnaam (meest recente prijs),
+    // élke variant als los punt in de geschiedenis.
+    const { hoofdItems, historieItems } = collapseDatumVarianten(kept);
+    items = hoofdItems;
 
     const existing = await this.getAllPrices();
 
@@ -382,7 +429,7 @@ class NotionSync {
       }
     }
 
-    if (!dryRun) await this.saveHistory(items);
+    if (!dryRun) await this.saveHistory(historieItems);
 
     return results;
   }
@@ -395,3 +442,6 @@ module.exports.isGeblokkeerdeLeverancier = isGeblokkeerdeLeverancier;
 module.exports.NON_FOOD_BLACKLIST = NON_FOOD_BLACKLIST;
 module.exports.isDrank = isDrank;
 module.exports.DRANK_BLACKLIST = DRANK_BLACKLIST;
+module.exports.stripDatum = stripDatum;
+module.exports.parseDatumUitNaam = parseDatumUitNaam;
+module.exports.collapseDatumVarianten = collapseDatumVarianten;

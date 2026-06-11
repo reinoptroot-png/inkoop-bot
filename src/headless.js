@@ -138,10 +138,16 @@ async function run() {
     return;
   }
 
+  // Datum-varianten in productnamen samenvoegen ("asperges aa ongeschild 2-6" +
+  // "...5-6" → één product "asperges aa ongeschild"). hoofdItems = één entry per
+  // basisnaam met de meest recente prijs; historieItems = élke datumvariant als
+  // los prijspunt voor de Inkoop Geschiedenis.
+  const { hoofdItems, historieItems } = NotionSync.collapseDatumVarianten(kept);
+
   const notionPrices = await notion.getAllPrices();
 
   const alerts = [];
-  for (const item of kept) {
+  for (const item of hoofdItems) {
     const naam = item.ingredient.toLowerCase().trim();
     const existing = notionPrices.find(n => n.name === naam);
 
@@ -196,7 +202,7 @@ async function run() {
     }
   }
 
-  await notion.saveHistory(kept);
+  await notion.saveHistory(historieItems);
 
   if (alerts.length) {
     console.log(`[inkoop-bot] ${alerts.length} grote prijswijziging(en) — wachten op bevestiging in app:`);
