@@ -71,7 +71,7 @@ Geef voor elk product:
 - original: exact de ingevoerde naam
 - simple_name: korte Nederlandse naam, lowercase (bijv "tomaat", "kippendij", "parmezaan reggiano")
 - is_drank: true als het een drank/drankverwant product is (water, wijn, bier, frisdrank, sap, koffie, thee, etc), anders false. UITZONDERING: producten die "azijn" bevatten (wijnazijn, champagne azijn, balsamico azijn, etc.) zijn altijd is_drank: false, categorie: droogwaren.
-- categorie: één van: zuivel | vlees | vis | groenten | droogwaren | drank
+- categorie: één van: zuivel | vlees | vis | groenten | droogwaren | specerijen | drank. Kies "specerijen" voor kruiden/specerijen (peper, zout, tijm, basilicum, kaneel, etc.), "groenten" voor verse groenten/fruit, "zuivel" voor melk/kaas/room/boter/eieren, "vlees" voor vlees/gevogelte, "vis" voor vis/schaal-/schelpdieren, "droogwaren" voor houdbare/droge producten (pasta, meel, olie, conserven), "drank" alleen voor dranken. Gebruik "droogwaren" alleen als geen andere categorie past.
 
 Retourneer ALLEEN een JSON array, geen markdown, geen uitleg.
 
@@ -275,6 +275,19 @@ class NotionSync {
       cursor = r.has_more ? r.next_cursor : undefined;
     } while (cursor);
     return results;
+  }
+
+  // Classificeer producten (simple_name / is_drank / categorie) via Claude Haiku,
+  // in batches van 20 zodat het antwoord niet afgekapt wordt. Een mislukte batch
+  // levert simpelweg geen classificatie → die producten vallen terug op 'droogwaren'.
+  async classify(items) {
+    if (!items || !items.length || !this.anthropicKey) return [];
+    const out = [];
+    for (let i = 0; i < items.length; i += 20) {
+      try { out.push(...await classifyBatch(items.slice(i, i + 20), this.anthropicKey)); }
+      catch (e) { console.warn('[classify] batch fout:', e.message); }
+    }
+    return out;
   }
 
   // Spiegel ALLE (niet-gearchiveerde) Notion-ingrediënten naar Supabase

@@ -159,6 +159,7 @@ async function run() {
   const notionPrices = await notion.getAllPrices();
 
   const alerts = [];
+  const nieuweItems = [];
   for (const item of hoofdItems) {
     const naam = item.ingredient.toLowerCase().trim();
     const existing = notionPrices.find(n => n.name === naam);
@@ -200,8 +201,24 @@ async function run() {
         }
       }
     } else {
-      // Nieuw product: aanmaken in Notion + informatieve melding
-      await notion.createProduct(item);
+      // Nieuw product: verzamelen → straks in batch classificeren (categorie/is_drank)
+      nieuweItems.push(item);
+    }
+  }
+
+  // Nieuwe producten classificeren met Claude Haiku zodat ze de juiste categorie
+  // krijgen (zuivel/vlees/vis/groenten/droogwaren/specerijen/drank) i.p.v. de oude
+  // standaard 'droogwaren'. Naam blijft de basisnaam (zodat de prijshistorie matcht).
+  if (nieuweItems.length) {
+    let classified = [];
+    try { classified = await notion.classify(nieuweItems); }
+    catch (e) { console.warn('[classify] mislukt, val terug op standaard categorie:', e.message); }
+    for (const item of nieuweItems) {
+      const naam = item.ingredient.toLowerCase().trim();
+      const cls = classified.find(c => (c.original || '').toLowerCase().trim() === naam) || {};
+      const categorie = cls.categorie || 'droogwaren';
+      const drank = cls.is_drank || NotionSync.isDrank(naam);
+      await notion.createProduct({ ...item, categorie, isDrank: drank });
       await schrijfMelding({
         type: 'nieuw_product',
         ingredient_naam: naam,
@@ -210,7 +227,7 @@ async function run() {
         status: 'pending',
         gelezen: false,
       });
-      console.log(`  ✨ NIEUW: "${naam}" via ${item.leverancier}`);
+      console.log(`  ✨ NIEUW: "${naam}" (${categorie}${drank ? ', drank' : ''}) via ${item.leverancier}`);
     }
   }
 
