@@ -77,6 +77,17 @@ async function run() {
   const results = (await Promise.all(scanners.map(s => s.scan(scanOpts)))).flat();
   console.log(`[inkoop-bot] ${results.length} items gescand`);
 
+  // Tijdstip van deze scan vastleggen — óók als er geen nieuwe emails zijn —
+  // zodat het Dashboard "Laatste scan" altijd het werkelijke scanmoment toont.
+  if (supabase) {
+    const nu = new Date().toISOString();
+    const { error } = await supabase.from('instellingen').upsert(
+      { restaurant: 'europizza', key: 'laatste_scan', value: nu, updated_at: nu },
+      { onConflict: 'restaurant,key' });
+    if (error) console.warn('[scan] laatste_scan niet opgeslagen:', error.message);
+    else console.log(`[inkoop-bot] laatste_scan vastgelegd: ${nu}`);
+  }
+
   // Nieuwe food-leverancier kandidaten → 'nieuwe_leverancier' meldingen
   const kandidaten = scanners.flatMap(s => s.nieuweLeveranciers || []);
   if (kandidaten.length) {

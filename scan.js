@@ -67,6 +67,16 @@ async function run() {
     if (n) console.log(`Nieuwe leverancier-meldingen aangemaakt: ${n}`);
   }
 
+  // Tijdstip van deze scan vastleggen (ook zonder nieuwe emails) → Dashboard "Laatste scan"
+  if (settings.supabaseUrl && settings.supabaseKey) {
+    const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+    const nu = new Date().toISOString();
+    const { error } = await sb.from('instellingen').upsert(
+      { restaurant: 'europizza', key: 'laatste_scan', value: nu, updated_at: nu },
+      { onConflict: 'restaurant,key' });
+    if (error) console.warn('[scan] laatste_scan niet opgeslagen:', error.message);
+  }
+
   // Lightspeed dagrapporten → Supabase (ook als er geen facturen zijn)
   const dagrapporten = [...(scanner1.dagrapporten || []), ...(scanner2 ? (scanner2.dagrapporten || []) : [])];
   if (dagrapporten.length && settings.supabaseUrl && settings.supabaseKey) {
