@@ -290,6 +290,51 @@ class NotionSync {
     return out;
   }
 
+  // Detecteer mogelijke dubbelen: ingrediënten die sterk op elkaar lijken
+  // (fuzzy >85%) én dezelfde leverancier hebben. Schrijft per nieuw paar een
+  // `mogelijk_dubbel` melding naar Supabase scan_meldingen (dedup op naam-paar).
+  async detecteerDubbels(supabase) {
+    if (!supabase) return { count: 0 };
+    const prices = await this.getAllPrices();
+    let bestaande = [];
+    try {
+      const { data } = await supabase.from('scan_meldingen').select('ingredient_naam, scan_naam').eq('type', 'mogelijk_dubbel');
+      bestaande = data || [];
+    } catch {}
+    const gezien = new Set(bestaande.map(m => [m.ingredient_naam, m.scan_naam].sort().join('::')));
+    const meldingen = [];
+    for (let i = 0; i < prices.length; i++) {
+      for (let j = i + 1; j < prices.length; j++) {
+        const a = prices[i], b = prices[j];
+        const levA = (a.leverancier || '').toLowerCase().trim();
+        const levB = (b.leverancier || '').toLowerCase().trim();
+        if (!levA || levA !== levB) continue; // zelfde leverancier vereist
+        const score = Math.max(tokenJaccard(a.name, b.name), nameSimilarity(a.name, b.name));
+        if (score <= 0.85) continue;
+        const key = [a.name, b.name].sort().join('::');
+        if (gezien.has(key)) continue;
+        gezien.add(key);
+        // Doel = het product met (de meest betrouwbare) prijs; bron = de ander.
+        const target = a.price != null ? a : (b.price != null ? b : a);
+        const source = target === a ? b : a;
+        meldingen.push({
+          type: 'mogelijk_dubbel',
+          ingredient_naam: source.name,
+          scan_naam: target.name,
+          leverancier: a.leverancier || '',
+          bestaand_page_id: target.pageId,
+          status: 'pending',
+          gelezen: false,
+        });
+      }
+    }
+    if (meldingen.length) {
+      const { error } = await supabase.from('scan_meldingen').insert(meldingen);
+      if (error) console.warn('[dubbel] insert fout:', error.message);
+    }
+    return { count: meldingen.length };
+  }
+
   // Spiegel ALLE (niet-gearchiveerde) Notion-ingrediënten naar Supabase
   // `inkoop_prijzen`. Notion blijft bron van waarheid; Supabase is de read-cache
   // voor /api/ingredienten. Rijen die niet meer in Notion staan worden verwijderd.

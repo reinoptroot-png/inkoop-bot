@@ -122,6 +122,10 @@ async function run() {
       if (m?.error) console.warn('[mirror] Supabase niet bijgewerkt:', m.error);
       else if (m?.count != null) console.log(`[inkoop-bot] ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
     } catch (e) { console.warn('[mirror] fout:', e.message); }
+    try {
+      const d = await notion.detecteerDubbels(supabase);
+      if (d?.count) console.log(`[inkoop-bot] ${d.count} mogelijk-dubbel melding(en) aangemaakt`);
+    } catch (e) { console.warn('[dubbel] fout:', e.message); }
   }
 
   if (results.length === 0) {
