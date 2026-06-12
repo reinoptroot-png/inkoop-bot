@@ -190,18 +190,36 @@ function parseDatumUitNaam(naam) {
   return `${jaar}-${pad(maand)}-${pad(dag)}`;
 }
 
+// Normaliseer de sorterings-/kwaliteitsklasse (alleen voor asperges): "aa"/"aaa"/
+// "aaaa" is géén apart product maar een grade. Strip het uit de naam en geef de
+// klasse terug. "asperges aa ongeschild" + "asperges aaa ongeschild" → beide
+// "asperges ongeschild" (klasse AA resp. AAA, op te slaan in raw data).
+function normaliseerKwaliteit(naam) {
+  const n = String(naam || '');
+  if (!/asperge/i.test(n)) return { base: n.trim(), klasse: '' };
+  const m = n.match(/\b(a{2,4})\b/i); // standalone aa/aaa/aaaa
+  const klasse = m ? m[1].toUpperCase() : '';
+  const base = n.replace(/\b(a{2,4})\b/i, ' ').replace(/\s*,\s*/g, ', ').replace(/\s{2,}/g, ' ').replace(/\s+,/g, ',').trim();
+  return { base, klasse };
+}
+
 // Voeg datum-varianten samen. Retourneert:
 //  - hoofdItems:    één item per basisnaam, met de prijs van de MEEST RECENTE datum
 //                   (voor de Inkoop Prijzen entry — géén losse entry per datum).
 //  - historieItems: élke variant met basisnaam + eigen datum (voor de Inkoop
 //                   Geschiedenis — aparte stippen in de prijsgrafiek).
+// Strip ook de datum (stripDatum) én de asperges-kwaliteitsklasse (normaliseerKwaliteit).
 function collapseDatumVarianten(items) {
   const vandaag = new Date().toISOString().split('T')[0];
-  const historieItems = (items || []).map(it => ({
-    ...it,
-    ingredient: stripDatum(it.ingredient),
-    datum: parseDatumUitNaam(it.ingredient) || vandaag,
-  }));
+  const historieItems = (items || []).map(it => {
+    const { base, klasse } = normaliseerKwaliteit(stripDatum(it.ingredient));
+    return {
+      ...it,
+      ingredient: base,
+      kwaliteitsklasse: klasse || it.kwaliteitsklasse || '',
+      datum: parseDatumUitNaam(it.ingredient) || vandaag,
+    };
+  });
   const perBasis = new Map();
   for (const it of historieItems) {
     const key = it.ingredient.toLowerCase().trim();
@@ -618,3 +636,4 @@ module.exports.parseDatumUitNaam = parseDatumUitNaam;
 module.exports.collapseDatumVarianten = collapseDatumVarianten;
 module.exports.bouwRawData = bouwRawData;
 module.exports.parseInkoopeenheid = parseInkoopeenheid;
+module.exports.normaliseerKwaliteit = normaliseerKwaliteit;
