@@ -314,6 +314,7 @@ class NotionSync {
           isDrank: props['Is drank']?.checkbox || false,
           categorie: props['Categorie']?.select?.name || '',
           rawData: props['Raw data']?.rich_text?.[0]?.plain_text || '',
+          laatsteUpdate: props['Laatste update']?.last_edited_time || page.last_edited_time || '',
         });
       }
       cursor = r.has_more ? r.next_cursor : undefined;
@@ -384,6 +385,150 @@ class NotionSync {
       if (error) console.warn('[dubbel] insert fout:', error.message);
     }
     return { count: meldingen.length };
+  }
+
+  // Intelligente AUTO-MERGE van overduidelijke dubbelen — zónder melding, gewoon
+  // doen. Draait bij elke scan over het HELE assortiment (vergelijkt alle actieve
+  // ingrediënten paarsgewijs). Auto-merge vereist ALTIJD een NAAM-relatie + dezelfde
+  // leverancier — een toevallig gelijke prijs alléén voegt nooit ongerelateerde
+  // namen samen (in dit assortiment delen veel verschillende producten een prijs).
+  //   A) naam fuzzy match >90% (token-Jaccard / similarity)              → merge
+  //   B) generiek ⊂ specifiek: de korte naam is een betekenisvolle-token-
+  //      subset van de lange én ze eindigen op hetzelfde hoofdwoord
+  //      ("eieren" ⊂ "dagverse freiland eieren", "kropsla" ⊂ "kropsla bio"),
+  //      bevestigd door zelfde prijs OF fuzzy >78%                        → merge
+  // aa/aaa-grades worden nooit samengevoegd. Groepen via union-find (3+ samen).
+  // Per groep: langste/meest beschrijvende naam = hoofd, de rest worden aliassen;
+  // meest recente prijs blijft; prijshistorie gecombineerd; raw_data geërfd;
+  // bronnen gearchiveerd; merge gelogd in de Inkoop Geschiedenis (Source-veld).
+  async autoMerge() {
+    const prices = await this.getAllPrices();
+    const n = prices.length;
+    const parent = prices.map((_, i) => i);
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+
+    // Stopwoorden + kwalificaties + verpakkings-/maat-tokens negeren we bij de
+    // naam-relatie, zodat alleen de eigenlijke productwoorden tellen.
+    const STOP = new Set(['bio','vers','verse','dagverse','circa','de','het','een','van','met','st','stk','stuks','kg','gr','gram','kist','doos','bak','bakje','krat','blik','pak','zak','bos','bol','emmer','bulk','fr','nl','it','es','gangbaar','diversen','stuksartikel','glas']);
+    const tokens = (s) => String(s).toLowerCase().split(/[\s,.()\-\/]+/).filter(t => t.length > 1);
+    // Betekenisvolle tokens: geen stopwoord en niet beginnend met een cijfer
+    // (maten als "1l", "20cl", "5kg", "12-14", "70" tellen niet mee).
+    const sig = (s) => tokens(s).filter(t => !STOP.has(t) && !/^\d/.test(t));
+    const head = (arr) => arr.length ? arr[arr.length - 1] : '';
+    const stripGrade = (s) => String(s).replace(/\b(a{2,4})\b/i, ' ').replace(/\s{2,}/g, ' ').trim().toLowerCase();
+    const grade = (s) => ((String(s).match(/\b(a{2,4})\b/i) || [])[1] || '').toLowerCase();
+    const isSubset = (kort, lang) => kort.length > 0 && kort.every(t => lang.includes(t));
+
+    const redenen = {}; // root-index → set van redenen (voor de log)
+    const noteer = (i, r) => { const k = find(i); (redenen[k] = redenen[k] || new Set()).add(r); };
+
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const a = prices[i], b = prices[j];
+        const levA = (a.leverancier || '').toLowerCase().trim();
+        const levB = (b.leverancier || '').toLowerCase().trim();
+        if (!levA || levA !== levB) continue; // zelfde leverancier vereist
+        // aa vs aaa = aparte kwaliteitsklasse → nooit auto-mergen
+        const gA = grade(a.name), gB = grade(b.name);
+        if ((gA || gB) && gA !== gB && stripGrade(a.name) === stripGrade(b.name)) continue;
+
+        const sa = sig(a.name), sb = sig(b.name);
+        const zelfdePrijs = a.price != null && b.price != null && Math.abs(a.price - b.price) < 0.005;
+        const score = Math.max(tokenJaccard(a.name, b.name), nameSimilarity(a.name, b.name));
+        // Generiek ⊂ specifiek + zelfde hoofdwoord (laatste betekenisvolle token)
+        const overlap = sa.length && sb.length && head(sa) === head(sb) && (isSubset(sa, sb) || isSubset(sb, sa));
+        let reden = '';
+        if (score > 0.90) reden = `naam ${Math.round(score * 100)}% match`;
+        else if (overlap && (zelfdePrijs || score > 0.78)) {
+          reden = zelfdePrijs ? 'naam-overlap + zelfde prijs' : 'sterke naam-overlap';
+        }
+        if (!reden) continue;
+        union(i, j);
+        noteer(i, reden);
+      }
+    }
+
+    // Groepeer per union-find root
+    const groepen = new Map();
+    for (let i = 0; i < n; i++) { const r = find(i); if (!groepen.has(r)) groepen.set(r, []); groepen.get(r).push(i); }
+
+    let merged = 0;
+    for (const [root, idxs] of groepen) {
+      if (idxs.length < 2) continue;
+      const leden = idxs.map(i => prices[i]);
+      // Hoofd = langste (meest beschrijvende) naam; tie-break: meeste tokens
+      leden.sort((x, y) => y.name.length - x.name.length || tokens(y.name).length - tokens(x.name).length);
+      const hoofd = leden[0];
+      const bronnen = leden.slice(1);
+      // Meest recente prijs (op Laatste update); val terug op hoofd
+      const metPrijs = leden.filter(m => m.price != null).sort((x, y) => String(y.laatsteUpdate).localeCompare(String(x.laatsteUpdate)));
+      const prijsBron = metPrijs[0] || hoofd;
+      // Aliassen samenvoegen (bron-namen + alle aliassen, zonder de hoofd-naam)
+      const aliasSet = new Set([...(hoofd.aliassen || [])]);
+      for (const b of bronnen) { aliasSet.add(b.name); for (const al of (b.aliassen || [])) aliasSet.add(al); }
+      aliasSet.delete(hoofd.name);
+      // Raw data erven als het hoofd er nog geen heeft maar een lid wel
+      const hoofdHeeftRaw = !!(hoofd.rawData && hoofd.rawData.trim());
+      let raw = hoofd.rawData;
+      if (!hoofdHeeftRaw) { const metRaw = leden.find(m => m.rawData && m.rawData.trim()); if (metRaw) raw = metRaw.rawData; }
+
+      const props = { 'Aliassen': { rich_text: [{ text: { content: [...aliasSet].join(', ').slice(0, 1999) } }] } };
+      if (prijsBron.price != null) {
+        props['Kostprijs'] = { number: prijsBron.price };
+        if ((prijsBron.leverancier || '').trim()) props['Leverancier'] = { rich_text: [{ text: { content: prijsBron.leverancier } }] };
+      }
+      if (raw && !hoofdHeeftRaw) props['Raw data'] = { rich_text: [{ text: { content: raw.slice(0, 1999) } }] };
+
+      try {
+        await this.client.pages.update({ page_id: hoofd.pageId, properties: props });
+        for (const b of bronnen) {
+          await this.hernoemHistorie(b.name, hoofd.name);
+          await this.client.pages.update({ page_id: b.pageId, archived: true });
+        }
+        const reden = [...(redenen[root] || ['dubbel'])].join(', ');
+        await this.logMerge(hoofd, bronnen.map(b => b.name), prijsBron.price, reden);
+        console.log(`  🔀 AUTO-MERGE: "${hoofd.name}" ← ${bronnen.map(b => `"${b.name}"`).join(', ')} (${reden})`);
+        merged += bronnen.length;
+      } catch (e) {
+        console.warn(`[auto-merge] fout bij "${hoofd.name}": ${e.message}`);
+      }
+    }
+    return { merged };
+  }
+
+  // Hernoem alle Inkoop Geschiedenis-rijen van een bron-naam naar de doel-naam
+  // (gecombineerde prijsgrafiek na een merge).
+  async hernoemHistorie(vanNaam, naarNaam) {
+    let cursor;
+    do {
+      const r = await this.client.databases.query({
+        database_id: this.historyDbId, start_cursor: cursor, page_size: 100,
+        filter: { property: 'Ingredient', title: { equals: vanNaam } },
+      });
+      for (const h of r.results) {
+        try { await this.client.pages.update({ page_id: h.id, properties: { 'Ingredient': { title: [{ text: { content: naarNaam } }] } } }); } catch {}
+      }
+      cursor = r.has_more ? r.next_cursor : undefined;
+    } while (cursor);
+  }
+
+  // Log een merge als rij in de Inkoop Geschiedenis (Source-veld = beschrijving),
+  // zodat hij in de activiteitslog van het ingredient verschijnt.
+  async logMerge(hoofd, bronNamen, prijs, reden) {
+    const vandaag = new Date().toISOString().split('T')[0];
+    try {
+      await this.client.pages.create({
+        parent: { database_id: this.historyDbId },
+        properties: {
+          'Ingredient': { title: [{ text: { content: hoofd.name } }] },
+          ...(prijs != null ? { 'Prijs': { number: prijs } } : {}),
+          'Leverancier': { rich_text: [{ text: { content: hoofd.leverancier || '' } }] },
+          'Datum': { date: { start: vandaag } },
+          'Source': { rich_text: [{ text: { content: `Automatisch samengevoegd met ${bronNamen.map(b => `"${b}"`).join(', ')} (${reden})`.slice(0, 1999) } }] },
+        },
+      });
+    } catch (e) { console.warn('[auto-merge] log fout:', e.message); }
   }
 
   // Spiegel ALLE (niet-gearchiveerde) Notion-ingrediënten naar Supabase

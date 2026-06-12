@@ -137,6 +137,12 @@ async function run() {
   // elke scan, ook als er geen nieuwe facturen zijn (vangt handmatige edits mee).
   async function spiegelNaarSupabase() {
     if (!supabase) return;
+    // Overduidelijke dubbelen automatisch samenvoegen (zonder melding) vóór de
+    // mirror, zodat Supabase meteen het opgeschoonde assortiment krijgt.
+    try {
+      const am = await notion.autoMerge();
+      if (am?.merged) console.log(`[inkoop-bot] ${am.merged} dubbel(en) automatisch samengevoegd`);
+    } catch (e) { console.warn('[auto-merge] fout:', e.message); }
     try {
       const m = await notion.mirrorNaarSupabase(supabase);
       if (m?.error) console.warn('[mirror] Supabase niet bijgewerkt:', m.error);
