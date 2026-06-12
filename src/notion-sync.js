@@ -190,17 +190,15 @@ function parseDatumUitNaam(naam) {
   return `${jaar}-${pad(maand)}-${pad(dag)}`;
 }
 
-// Normaliseer de sorterings-/kwaliteitsklasse (alleen voor asperges): "aa"/"aaa"/
-// "aaaa" is géén apart product maar een grade. Strip het uit de naam en geef de
-// klasse terug. "asperges aa ongeschild" + "asperges aaa ongeschild" → beide
-// "asperges ongeschild" (klasse AA resp. AAA, op te slaan in raw data).
+// Lees de sorterings-/kwaliteitsklasse uit (alleen voor asperges): "aa"/"aaa"/
+// "aaaa". Dit IS een apart product (aa ≠ aaa), dus de klasse blijft in de naam
+// staan — we geven hem alleen óók als los veld terug zodat hij in raw data kan.
 function normaliseerKwaliteit(naam) {
   const n = String(naam || '');
-  if (!/asperge/i.test(n)) return { base: n.trim(), klasse: '' };
+  const base = n.trim();
+  if (!/asperge/i.test(n)) return { base, klasse: '' };
   const m = n.match(/\b(a{2,4})\b/i); // standalone aa/aaa/aaaa
-  const klasse = m ? m[1].toUpperCase() : '';
-  const base = n.replace(/\b(a{2,4})\b/i, ' ').replace(/\s*,\s*/g, ', ').replace(/\s{2,}/g, ' ').replace(/\s+,/g, ',').trim();
-  return { base, klasse };
+  return { base, klasse: m ? m[1].toUpperCase() : '' };
 }
 
 // Voeg datum-varianten samen. Retourneert:
@@ -355,6 +353,12 @@ class NotionSync {
         const levA = (a.leverancier || '').toLowerCase().trim();
         const levB = (b.leverancier || '').toLowerCase().trim();
         if (!levA || levA !== levB) continue; // zelfde leverancier vereist
+        // aa vs aaa = aparte kwaliteitsklasse, géén dubbel: verschillen de namen
+        // alléén in de standalone grade (a{2,4}), sla het paar over.
+        const gradeA = (a.name.match(/\b(a{2,4})\b/i) || [])[1] || '';
+        const gradeB = (b.name.match(/\b(a{2,4})\b/i) || [])[1] || '';
+        const stripGrade = (s) => String(s).replace(/\b(a{2,4})\b/i, ' ').replace(/\s{2,}/g, ' ').trim().toLowerCase();
+        if ((gradeA || gradeB) && gradeA.toLowerCase() !== gradeB.toLowerCase() && stripGrade(a.name) === stripGrade(b.name)) continue;
         const score = Math.max(tokenJaccard(a.name, b.name), nameSimilarity(a.name, b.name));
         if (score <= 0.85) continue;
         const key = [a.name, b.name].sort().join('::');
