@@ -25,9 +25,29 @@ if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
   console.warn('[melding] ⚠ SUPABASE_URL/SUPABASE_ANON_KEY ontbreken — meldingen worden NIET naar de webapp geschreven. Zie .env.example.');
 }
 
+// Idempotente meldingen: voorkom dat dezelfde melding bij elke scan opnieuw
+// instroomt (de "loop"). Eénmalige types (nieuw_product/koppeling/mogelijk_dubbel/
+// nieuwe_leverancier) worden gededupliceerd op type+naam(+scan_naam); prijs-types
+// op type+naam+nieuwe prijs (zelfde prijswijziging niet telkens opnieuw melden).
+async function bestaatAlMelding(data) {
+  if (!supabase) return false;
+  try {
+    let q = supabase.from('scan_meldingen').select('id').eq('type', data.type).limit(1);
+    if (data.ingredient_naam != null) q = q.eq('ingredient_naam', data.ingredient_naam);
+    if (data.type === 'mogelijk_dubbel') {
+      if (data.scan_naam != null) q = q.eq('scan_naam', data.scan_naam);
+    } else if (data.type === 'prijs_groot' || data.type === 'prijs_klein') {
+      if (data.prijs_nieuw != null) q = q.eq('prijs_nieuw', data.prijs_nieuw);
+    }
+    const { data: rows } = await q;
+    return (rows || []).length > 0;
+  } catch { return false; }
+}
+
 async function schrijfMelding(data) {
   if (!supabase) return;
   try {
+    if (await bestaatAlMelding(data)) return; // al gemeld → niet opnieuw (anti-loop)
     const { error } = await supabase.from('scan_meldingen').insert(data);
     if (error) console.warn(`[melding] Supabase schrijffout ("${data.ingredient_naam}"):`, error.message);
   } catch (e) {
@@ -164,9 +184,14 @@ async function run() {
   // Lookup op naam ÉN alias — zo herkent de bot eerder samengevoegde producten
   // (de oude naam leeft voort als alias) en maakt hij ze niet opnieuw aan.
   const naamMap = {};
+  const idx = (sleutel, e) => { const k = String(sleutel || '').toLowerCase().trim(); if (k && !naamMap[k]) naamMap[k] = e; };
   for (const e of notionPrices) {
-    naamMap[e.name] = e;
-    for (const a of (e.aliassen || [])) naamMap[a] = e;
+    idx(e.name, e);
+    // Match ook op de gestripte basisnaam: producten die ooit met datum-suffix in
+    // Notion zijn aangemaakt ("asperges aa groen 5-6") matchen zo alsnog met de
+    // nieuwe gestripte basisnaam ("asperges aa groen") → geen re-creatie / loop.
+    idx(NotionSync.stripDatum(e.name), e);
+    for (const a of (e.aliassen || [])) { idx(a, e); idx(NotionSync.stripDatum(a), e); }
   }
 
   const alerts = [];
