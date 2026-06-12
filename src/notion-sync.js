@@ -211,12 +211,14 @@ function collapseDatumVarianten(items) {
   const vandaag = new Date().toISOString().split('T')[0];
   const historieItems = (items || []).map(it => {
     const { base, klasse } = normaliseerKwaliteit(stripDatum(it.ingredient));
-    return {
+    // Structurele prijs-eenheid regel: normaliseer naar prijs per kg (kistprijs
+    // ÷ kg-inhoud) vóór opslag/vergelijking — geldt voor headless én syncAll.
+    return normaliseerPrijsPerKg({
       ...it,
       ingredient: base,
       kwaliteitsklasse: klasse || it.kwaliteitsklasse || '',
       datum: parseDatumUitNaam(it.ingredient) || vandaag,
-    };
+    });
   });
   const perBasis = new Map();
   for (const it of historieItems) {
@@ -242,7 +244,10 @@ function bouwRawData(item) {
   add('gewicht', item.gewicht);
   add('verpakking', item.verpakking);
   add('eenheid', item.eenheid);
-  add('prijs', item.price != null ? `€ ${Number(item.price).toFixed(2)}` : null);
+  add('prijs', item.price != null ? `€ ${Number(item.price).toFixed(2)}${item.eenheid && /kg/i.test(item.eenheid) ? '/kg' : ''}` : null);
+  // Originele factuurprijs per inkoopeenheid (vóór normalisatie naar prijs/kg)
+  add('prijs per inkoopeenheid', item.prijs_origineel != null ? `€ ${Number(item.prijs_origineel).toFixed(2)}` : null);
+  add('inhoud', item.gram_per_inkoopeenheid ? `${item.gram_per_inkoopeenheid} g` : null);
   add('btw', item.btw);
   add('factuurnr', item.factuurnummer);
   add('ordernr', item.ordernummer);
@@ -267,6 +272,51 @@ function parseInkoopeenheid(naam) {
   }
   const m = n.match(/((?:kist|krat|doos|bak|emmer|pak|zak|bos|tray|blik|fles|bus|rol|pot)\s*\d*\s*(?:kg|kilo|gram|gr|g|ml|liter|ltr|l|cl|st|stuks?|bossen?)?|\d+\s*(?:kg|kilo|gram|gr|g|ml|liter|ltr|l|cl|st|stuks?))\s*$/i);
   return m ? m[1].trim().replace(/\.$/, '') : '';
+}
+
+// Lees het GEWICHT in grammen uit een inkoopeenheid-tekst ("kist 5 kg" → 5000,
+// "2kg" → 2000, "circa 100 gram" → 100, "1l" → 1000, "blik 5l" → 5000,
+// "bulk 5/6 kg" → 5500 [gemiddelde]). Stuks-eenheden ("kist 9 st") → null.
+function parseGramPerInkoopeenheid(tekst) {
+  const t = String(tekst || '').toLowerCase();
+  if (!t) return null;
+  if (/\d\s*(?:st|stk|stuks?|bossen?|bos)\b/.test(t)) return null; // stuks, geen gewicht
+  const m = t.match(/(\d+(?:[.,]\d+)?)\s*(?:[-/]\s*(\d+(?:[.,]\d+)?))?\s*(kg|kilo|gram|gr|g|ml|liter|ltr|l|cl)\b/);
+  if (!m) return null;
+  const num = (s) => parseFloat(String(s).replace(',', '.'));
+  let v = num(m[1]);
+  if (m[2]) v = (v + num(m[2])) / 2; // bereik "5/6 kg" → gemiddelde
+  const unit = m[3];
+  if (/^(kg|kilo)$/.test(unit)) return Math.round(v * 1000);
+  if (/^(l|liter|ltr)$/.test(unit)) return Math.round(v * 1000); // 1l ≈ 1kg
+  if (/^cl$/.test(unit)) return Math.round(v * 10);
+  if (/^ml$/.test(unit)) return Math.round(v);
+  return Math.round(v); // gram/gr/g
+}
+
+// Normaliseer een scan-item naar PRIJS PER KG (structurele prijs-eenheid regel:
+// Kostprijs in Inkoop Prijzen is altijd per kg of per stuk). Als de factuurregel
+// een prijs per inkoopeenheid geeft (€ 44,25 per kist 5 kg) en het gewicht is
+// parsebaar → price = 44,25 ÷ 5 = 8,85/kg, eenheid 'kg', gram_per_inkoopeenheid
+// 5000, en de originele prijs blijft in prijs_origineel (→ raw data). Regels die
+// al per kg geprijsd zijn blijven ongemoeid; stuks-eenheden ook (stuksprijs-flow).
+function normaliseerPrijsPerKg(item) {
+  if (!item || item.price == null) return item;
+  if (/\b(kg|kilo)\b/i.test(item.eenheid || '')) {
+    // Al per kg — alleen het gewicht van de inkoopeenheid als metadata bewaren
+    const g = parseGramPerInkoopeenheid(item.inkoopeenheid || parseInkoopeenheid(item.ingredient) || item.gewicht || item.verpakking);
+    return g ? { ...item, gram_per_inkoopeenheid: g } : item;
+  }
+  const bron = item.inkoopeenheid || parseInkoopeenheid(item.ingredient) || item.gewicht || item.verpakking;
+  const gram = parseGramPerInkoopeenheid(bron);
+  if (!gram || gram < 10) return item; // niets parsebaars (of ruis) → laat staan
+  return {
+    ...item,
+    prijs_origineel: item.price,
+    price: Math.round((item.price / (gram / 1000)) * 100) / 100,
+    eenheid: 'kg',
+    gram_per_inkoopeenheid: gram,
+  };
 }
 
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
@@ -565,6 +615,7 @@ class NotionSync {
           seizoen: seizoenMatch ? seizoenMatch[1].trim() : '',
           is_drank: props['Is drank']?.checkbox || false,
           raw_data: props['Raw data']?.rich_text?.[0]?.plain_text || '',
+          gram_per_inkoopeenheid: props['Gram per inkoopeenheid']?.number ?? null,
           laatste_update: props['Laatste update']?.last_edited_time || page.last_edited_time || null,
           updated_at: runTs,
         });
@@ -572,8 +623,16 @@ class NotionSync {
       cursor = r.has_more ? r.next_cursor : undefined;
     } while (cursor);
 
+    let zonderGram = false; // fallback als de Supabase-kolom (nog) niet bestaat
     for (let i = 0; i < rows.length; i += 100) {
-      const { error } = await supabase.from('inkoop_prijzen').upsert(rows.slice(i, i + 100), { onConflict: 'id' });
+      let batch = rows.slice(i, i + 100);
+      if (zonderGram) batch = batch.map(({ gram_per_inkoopeenheid, ...r }) => r);
+      let { error } = await supabase.from('inkoop_prijzen').upsert(batch, { onConflict: 'id' });
+      if (error && /gram_per_inkoopeenheid/i.test(error.message)) {
+        zonderGram = true;
+        console.warn('[mirror] kolom gram_per_inkoopeenheid ontbreekt in Supabase — gespiegeld zonder dit veld. Voer uit in SQL Editor: alter table inkoop_prijzen add column gram_per_inkoopeenheid numeric;');
+        ({ error } = await supabase.from('inkoop_prijzen').upsert(batch.map(({ gram_per_inkoopeenheid, ...r }) => r), { onConflict: 'id' }));
+      }
       if (error) { console.warn('[mirror] upsert fout:', error.message); return { error: error.message }; }
     }
     // Prune: alles wat deze run niet is bijgewerkt = niet meer in Notion → weg
@@ -584,7 +643,7 @@ class NotionSync {
     return { count: rows.length };
   }
 
-  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '') {
+  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '', gramPerEenheid = null) {
     const today = new Date().toISOString().split('T')[0];
     const props = {
       'Kostprijs': { number: price },
@@ -596,6 +655,7 @@ class NotionSync {
     // Probeer 'Laatste update' + 'Raw data' te zetten (velden hoeven niet te bestaan)
     const extra = { ...props, 'Laatste update': { date: { start: today } } };
     if (rawData) extra['Raw data'] = { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] };
+    if (gramPerEenheid) extra['Gram per inkoopeenheid'] = { number: gramPerEenheid };
     try {
       await this.client.pages.update({ page_id: pageId, properties: extra });
     } catch {
@@ -630,6 +690,7 @@ class NotionSync {
         'Categorie': { select: { name: item.categorie || 'droogwaren' } },
         'Laatste update': { date: { start: today } },
         ...(inkoopeenheid ? { 'Inkoopeenheid': { rich_text: [{ text: { content: inkoopeenheid } }] } } : {}),
+        ...(item.gram_per_inkoopeenheid ? { 'Gram per inkoopeenheid': { number: item.gram_per_inkoopeenheid } } : {}),
         ...(rawData ? { 'Raw data': { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] } } : {})
       }});
     } catch {
@@ -786,3 +847,5 @@ module.exports.collapseDatumVarianten = collapseDatumVarianten;
 module.exports.bouwRawData = bouwRawData;
 module.exports.parseInkoopeenheid = parseInkoopeenheid;
 module.exports.normaliseerKwaliteit = normaliseerKwaliteit;
+module.exports.parseGramPerInkoopeenheid = parseGramPerInkoopeenheid;
+module.exports.normaliseerPrijsPerKg = normaliseerPrijsPerKg;
