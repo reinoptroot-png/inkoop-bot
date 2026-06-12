@@ -145,9 +145,9 @@ async function run() {
 
   // HSN-leverancier, non-food en lerende blacklist weren vóór verwerking
   const { kept, blocked } = NotionSync.filterScanItems(results, learnedBlacklist);
-  const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + blocked.learned.length;
+  const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + (blocked.drank?.length || 0) + blocked.learned.length;
   if (totaalGeweerd) {
-    console.log(`[filter] ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, blacklist:${blocked.learned.length}`);
+    console.log(`[filter] ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, drank:${blocked.drank?.length || 0}, blacklist:${blocked.learned.length}`);
   }
   if (kept.length === 0) {
     console.log('[inkoop-bot] Geen verwerkbare producten na filtering.');

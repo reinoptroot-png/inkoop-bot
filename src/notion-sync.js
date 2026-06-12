@@ -147,11 +147,17 @@ function isNonFood(naam) {
 }
 
 // Drank-blacklist: termen die een product altijd als drank markeren.
-// Vooral Franse wijntermen — diacriet-ongevoelig, op hele-woord match zodat
-// "cru" niet matcht in "crudités" en "cave" niet in onschuldige woorden.
+// Diacriet-ongevoelig, op hele-woord match zodat "cru" niet matcht in "crudités"
+// en "cola" niet in "chocola".
 const DRANK_BLACKLIST = [
+  // Franse wijntermen
   'vins', 'pirouettes', 'cuvée', 'château', 'domaine', 'cépage',
   'millésime', 'cave', 'vignoble', 'cru',
+  // Frisdrank / energie / softdrinks — horen nooit in Inkoop Prijzen
+  'cola', 'cola zero', 'coca cola', 'coca-cola', 'pepsi', 'fanta', 'sprite',
+  '7up', 'seven up', 'ice tea', 'icetea', 'ijsthee', 'tonic', 'bitter lemon',
+  'ginger beer', 'ginger ale', 'red bull', 'redbull', 'monster', 'energy drink',
+  'frisdrank', 'soda', 'limonade',
 ];
 function stripAccents(s) {
   return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -236,11 +242,12 @@ function bouwRawData(item) {
 function filterScanItems(items, learnedBlacklist = []) {
   const learnedSet = new Set((learnedBlacklist || []).map(s => (s || '').toLowerCase().trim()).filter(Boolean));
   const kept = [];
-  const blocked = { hsn: [], nonFood: [], learned: [] };
+  const blocked = { hsn: [], nonFood: [], drank: [], learned: [] };
   for (const item of items) {
     const naam = (item.ingredient || '').toLowerCase().trim();
     if (isGeblokkeerdeLeverancier(item.leverancier)) { blocked.hsn.push(naam); continue; }
     if (isNonFood(naam)) { blocked.nonFood.push(naam); continue; }
+    if (isDrank(naam)) { blocked.drank.push(naam); continue; } // frisdrank/wijn → nooit in Inkoop Prijzen
     if (learnedSet.has(naam)) { blocked.learned.push(naam); continue; }
     kept.push(item);
   }
@@ -471,9 +478,9 @@ class NotionSync {
 
     // Weer HSN-leverancier, non-food en de lerende blacklist vóór verwerking
     const { kept, blocked } = filterScanItems(items, learnedBlacklist);
-    const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + blocked.learned.length;
+    const totaalGeweerd = blocked.hsn.length + blocked.nonFood.length + (blocked.drank?.length || 0) + blocked.learned.length;
     if (totaalGeweerd) {
-      console.log(`  🚫 ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, blacklist:${blocked.learned.length}`);
+      console.log(`  🚫 ${totaalGeweerd} producten geweerd — HSN:${blocked.hsn.length}, non-food:${blocked.nonFood.length}, drank:${blocked.drank?.length || 0}, blacklist:${blocked.learned.length}`);
     }
     // Datum-varianten samenvoegen: één entry per basisnaam (meest recente prijs),
     // élke variant als los punt in de geschiedenis.
