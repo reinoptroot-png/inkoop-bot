@@ -237,6 +237,22 @@ function bouwRawData(item) {
   return v.join(' · ');
 }
 
+// Lees een inkoop-/verpakkingseenheid uit de productnaam, bijv.
+// "spitskool bio, kist 9 st." → "kist 9 st", "slagroom, 1l" → "1l",
+// "olijfolie ..., blik 5l" → "blik 5l", "kastanje champignon, 2kg" → "2kg".
+function parseInkoopeenheid(naam) {
+  const n = String(naam || '').trim();
+  if (!n) return '';
+  const verp = /(kist|krat|doos|dozen|bak|emmer|pak|pakken|zak|zakken|bos|bossen|tray|blik|fles|flacon|bus|rol|can|pot)/i;
+  const hoev = /\d+\s*(?:[-/]\s*\d+)?\s*(?:kg|kilo|gram|gr|g|ml|liter|ltr|l|cl|st|stuks?|bossen?)\b/i;
+  if (n.includes(',')) {
+    const na = n.split(',').pop().trim().replace(/\.$/, '');
+    if (na && (verp.test(na) || hoev.test(na))) return na;
+  }
+  const m = n.match(/((?:kist|krat|doos|bak|emmer|pak|zak|bos|tray|blik|fles|bus|rol|pot)\s*\d*\s*(?:kg|kilo|gram|gr|g|ml|liter|ltr|l|cl|st|stuks?|bossen?)?|\d+\s*(?:kg|kilo|gram|gr|g|ml|liter|ltr|l|cl|st|stuks?))\s*$/i);
+  return m ? m[1].trim().replace(/\.$/, '') : '';
+}
+
 // Filter scan-items vóór verwerking: HSN-leverancier, non-food, en de lerende
 // blacklist (uit Supabase non_food_blacklist). Retourneert { kept, blocked }.
 function filterScanItems(items, learnedBlacklist = []) {
@@ -439,12 +455,14 @@ class NotionSync {
     };
     // Optionele velden — alleen toevoegen als ze beschikbaar zijn in het schema
     const rawData = bouwRawData(item);
+    const inkoopeenheid = item.inkoopeenheid || parseInkoopeenheid(item.ingredient);
     try {
       await this.client.pages.create({ parent: { database_id: this.dbId }, properties: {
         ...props,
         'Is drank': { checkbox: item.isDrank || false },
         'Categorie': { select: { name: item.categorie || 'droogwaren' } },
         'Laatste update': { date: { start: today } },
+        ...(inkoopeenheid ? { 'Inkoopeenheid': { rich_text: [{ text: { content: inkoopeenheid } }] } } : {}),
         ...(rawData ? { 'Raw data': { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] } } : {})
       }});
     } catch {
@@ -599,3 +617,4 @@ module.exports.stripDatum = stripDatum;
 module.exports.parseDatumUitNaam = parseDatumUitNaam;
 module.exports.collapseDatumVarianten = collapseDatumVarianten;
 module.exports.bouwRawData = bouwRawData;
+module.exports.parseInkoopeenheid = parseInkoopeenheid;

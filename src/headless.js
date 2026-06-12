@@ -161,12 +161,19 @@ async function run() {
   const { hoofdItems, historieItems } = NotionSync.collapseDatumVarianten(kept);
 
   const notionPrices = await notion.getAllPrices();
+  // Lookup op naam ÉN alias — zo herkent de bot eerder samengevoegde producten
+  // (de oude naam leeft voort als alias) en maakt hij ze niet opnieuw aan.
+  const naamMap = {};
+  for (const e of notionPrices) {
+    naamMap[e.name] = e;
+    for (const a of (e.aliassen || [])) naamMap[a] = e;
+  }
 
   const alerts = [];
   const nieuweItems = [];
   for (const item of hoofdItems) {
     const naam = item.ingredient.toLowerCase().trim();
-    const existing = notionPrices.find(n => n.name === naam);
+    const existing = naamMap[naam];
 
     if (existing) {
       const diff = existing.price ? ((item.price - existing.price) / existing.price) * 100 : 0;
