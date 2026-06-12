@@ -9,15 +9,28 @@ function isLightspeed(email) {
     || /lightspeed|dagrapport|dagomzet|omzetrapport|day\s?report/i.test(subject);
 }
 
-// Zoek een CSV-downloadlink in de e-mailbody (html of tekst)
+// HTML-entities in URLs decoderen (&amp; → &, &#38; → &, …). Lightspeed-mails
+// bevatten ge-encode ampersands; zonder decode mist de querystring de token-param
+// en geeft de server HTTP 400 "token not present".
+function decodeUrl(u) {
+  return String(u)
+    .replace(/&amp;/gi, '&')
+    .replace(/&#0*38;/g, '&')
+    .replace(/&#x0*26;/gi, '&');
+}
+
+// Zoek een CSV-downloadlink in de e-mailbody (html of tekst). Voorkeur voor de
+// expliciete CSV-variant (csv=1 / .csv) boven de gewone (HTML) dagrapport-link.
 function extractCsvLink(email) {
   const body = `${email.html || ''}\n${email.text || ''}`;
   const hrefs = [...body.matchAll(/href=["']([^"']+)["']/gi)].map(m => m[1]);
   const urls = [...body.matchAll(/https?:\/\/[^\s"'<>)]+/gi)].map(m => m[0]);
-  const all = [...hrefs, ...urls];
-  return all.find(u => /\.csv(\?|$)/i.test(u))
+  const all = [...new Set([...hrefs, ...urls].map(decodeUrl))];
+  const link = all.find(u => /[?&]csv=1\b/i.test(u))      // expliciete CSV-export
+    || all.find(u => /\.csv(\?|$)/i.test(u))               // bestand .csv
     || all.find(u => /csv|export|download|report|rapport/i.test(u))
     || null;
+  return link;
 }
 
 function isLightspeedDagrapport(email) {
