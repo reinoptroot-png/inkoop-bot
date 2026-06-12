@@ -132,6 +132,9 @@ const NON_FOOD_BLACKLIST = [
   // horeca supplies / non-food
   'kaars', 'waxine', 'tandenstoker', 'cocktailprikker', 'onderzetter', 'placemat', 'menukaart', 'krijtbord',
   'handschoen', 'haarnet', 'schort', 'vaatdoek', 'theedoek', 'batterij', 'gloeilamp', 'bonrol', 'kassarol',
+  // EHBO / medisch / hygiëne (geen ingredient)
+  'detectaplast', 'pleister', 'vingerpleister', 'wondpleister', 'ehbo', 'verbandtrommel', 'verbandmiddel',
+  'mondkapje', 'mondmasker', 'desinfectiegel', 'handgel', 'wondspray', 'kompres', 'blauwe pleister',
 ];
 // Match op WOORDGRENS-start: "folie" matcht niet in "olijfolie", maar plurals/
 // samenstellingen mét het woord als basis (sopdoeken, vuilniszakken) wél.
