@@ -93,16 +93,30 @@ function parseDagrapport(csvText, fallbackDatum = null) {
     const cAantal = findCol(/^#$/, /^aantal$|qty|quantity|count|verkocht/);
     const cPrijs  = findCol(/^price$/, /prijs|price|unit/);
     const cTotaal = findCol(/^total$/, /^totaal$/, /bedrag|amount/);
+    const cCat    = findCol(/^category$/, /^categorie$/);
+    const cType   = findCol(/category[\s-]*type/, /type/);
+    // Per gerecht de CATEGORY-TYPE onthouden (Keuken = food, Wijn/Bier/… = drank).
+    // Die staat alleen op de categorie-aggregaatrij (lege PRODUCT-cel); we dragen
+    // hem mee naar de onderliggende productrijen.
+    let huidigeCat = '', huidigeType = '';
     for (let i = hi + 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r.join('').trim()) break;                                  // lege rij = einde sectie
       const naam = (cNaam >= 0 ? r[cNaam] : '').trim();               // category-aggregaatrijen hebben lege PRODUCT-cel
-      if (!naam || /^total$/i.test(naam)) continue;
+      if (!naam) {                                                    // categorie-header
+        const cat = cCat >= 0 ? (r[cCat] || '').trim() : '';
+        if (cat) { huidigeCat = cat; huidigeType = cType >= 0 ? (r[cType] || '').trim() : ''; }
+        continue;
+      }
+      if (/^total$/i.test(naam)) continue;
       gerechten.push({
         naam,
         aantal: cAantal >= 0 ? toNum(r[cAantal]) : null,
         prijs:  cPrijs  >= 0 ? toNum(r[cPrijs])  : null,
         totaal: cTotaal >= 0 ? toNum(r[cTotaal]) : null,
+        categorie: huidigeCat,
+        type: huidigeType,
+        food: /keuken|kitchen|food/i.test(huidigeType),
       });
     }
   }
