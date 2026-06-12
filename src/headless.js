@@ -190,7 +190,21 @@ async function run() {
       } else {
         // Kleine wijziging: meteen bijwerken
         await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier, existing.leverancier, NotionSync.bouwRawData(item));
-        if (pctAbs > 0) {
+        // Koppeling: de bot herkent voor het eerst een HANDMATIG ingevoerd product
+        // (had nog geen bot-rawdata) → "koppeling gemaakt" melding (groen).
+        if (!(existing.rawData && existing.rawData.trim())) {
+          await schrijfMelding({
+            type: 'koppeling',
+            ingredient_naam: naam,
+            leverancier: item.leverancier || '',
+            prijs_oud: existing.price,
+            prijs_nieuw: item.price,
+            bestaand_page_id: existing.pageId,
+            status: 'pending',
+            gelezen: false,
+          });
+          console.log(`  🔗 KOPPELING: "${naam}" (handmatig) ↔ bot scan via ${item.leverancier}`);
+        } else if (pctAbs > 0) {
           await schrijfMelding({
             type: 'prijs_klein',
             ingredient_naam: naam,

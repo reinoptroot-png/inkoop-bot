@@ -210,6 +210,7 @@ function bouwRawData(item) {
   const v = [];
   const add = (label, val) => { if (val != null && String(val).trim() !== '') v.push(`${label}: ${String(val).trim()}`); };
   add('leverancier', item.leverancier);
+  add('e-mail', item.leverancier_email);
   add('artikelnr', item.artikelnummer);
   add('barcode', item.barcode);
   add('omschrijving', item.omschrijving);
@@ -270,6 +271,7 @@ class NotionSync {
           aliassen: aliasRaw ? aliasRaw.split(',').map(a => a.trim().toLowerCase()).filter(Boolean) : [],
           isDrank: props['Is drank']?.checkbox || false,
           categorie: props['Categorie']?.select?.name || '',
+          rawData: props['Raw data']?.rich_text?.[0]?.plain_text || '',
         });
       }
       cursor = r.has_more ? r.next_cursor : undefined;
@@ -322,6 +324,7 @@ class NotionSync {
           ingredient_naam: source.name,
           scan_naam: target.name,
           leverancier: a.leverancier || '',
+          wijziging_pct: Math.round(score * 100), // match-% voor de melding
           bestaand_page_id: target.pageId,
           status: 'pending',
           gelezen: false,

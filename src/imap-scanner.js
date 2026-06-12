@@ -350,7 +350,7 @@ ${text.substring(0, 6000)}`;
         }
         const items = await this.parsePdfWithClaude(att.content, att.filename, debug);
         log(`[scan] "${att.filename}" → ${items.length} producten gevonden`);
-        allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '' })));
+        allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '', leverancier_email: senderAddress })));
       }
     }
 
