@@ -44,6 +44,10 @@ async function run() {
   try {
     rawData = await fetchTebiDayOverview(datum, settings.tebiToken);
   } catch (e) {
+    if (/auth mislukt|401|403/i.test(e.message)) {
+      console.log('[tebi-scan] Token verlopen — ververs tebiToken in settings.json. Overgeslagen.');
+      process.exit(0); // geen error, cron blijft stil
+    }
     console.error('[tebi-scan] Fetch fout:', e.message);
     process.exit(1);
   }
