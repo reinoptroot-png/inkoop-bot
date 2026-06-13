@@ -14,8 +14,7 @@ let supabase = null;
 if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
   try {
     const { createClient } = require('@supabase/supabase-js');
-    const ws = require('ws');
-    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY, { global: { WebSocket: ws } });
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
     console.log('[melding] Supabase meldingen ingeschakeld → scan_meldingen');
   } catch (e) {
     console.warn('[melding] Supabase init mislukt:', e.message);

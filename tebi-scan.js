@@ -6,7 +6,6 @@
 const path = require('path');
 const fs   = require('fs');
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');
 const { fetchTebiDayOverviewAuto, parseTebiDayOverview } = require('./src/tebi');
 
 const SETTINGS = path.join(__dirname, 'settings.json');
@@ -24,9 +23,6 @@ if (!settings.tebiToken && !settings.tebiRefreshToken) {
   console.error('[tebi-scan] Geen Tebi token gevonden — run eerst: node tebi-setup.js');
   process.exit(1);
 }
-console.log('[tebi-scan] supabaseUrl:', settings.supabaseUrl ? settings.supabaseUrl.slice(0, 10) + '…' : '(leeg)');
-console.log('[tebi-scan] supabaseKey:', settings.supabaseKey ? settings.supabaseKey.slice(0, 10) + '…' : '(leeg)');
-console.log('[tebi-scan] settings.json keys:', Object.keys(_sf).join(', ') || '(geen)');
 if (!settings.supabaseUrl || !settings.supabaseKey) {
   console.error('[tebi-scan] Supabase credentials ontbreken');
   process.exit(1);
@@ -64,7 +60,7 @@ async function run() {
 
   console.log(`Omzet: €${dr.totale_omzet ?? '?'} | Gasten: ${dr.aantal_gasten ?? '?'} | Tafels: ${dr.aantal_tafels ?? '?'} | Gerechten: ${dr.gerechten.length}`);
 
-  const sb = createClient(settings.supabaseUrl, settings.supabaseKey, { global: { WebSocket: ws } });
+  const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
   const { error } = await sb.from('dagrapport').upsert({
     datum: dr.datum, restaurant: 'europa',
     totale_omzet: dr.totale_omzet, bar_omzet: dr.bar_omzet, keuken_omzet: dr.keuken_omzet,

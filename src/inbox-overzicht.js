@@ -11,14 +11,13 @@ require('dotenv').config();
 const ImapScanner = require('./imap-scanner');
 const { lijktFoodLeverancier, afzenderNaam } = ImapScanner;
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');
 
 (async () => {
   const debug = process.argv.includes('--debug');
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!url || !key) { console.error('[inbox] Supabase niet geconfigureerd (SUPABASE_URL/SUPABASE_ANON_KEY)'); process.exit(1); }
-  const sb = createClient(url, key, { global: { WebSocket: ws } });
+  const sb = createClient(url, key);
 
   // Whitelist laden om per afzender te bepalen of die al bekend is
   const { data: levs, error: levErr } = await sb.from('leveranciers').select('email');
