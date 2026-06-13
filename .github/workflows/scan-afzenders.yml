@@ -1,0 +1,43 @@
+name: Scan afzenders (wekelijks)
+
+on:
+  schedule:
+    - cron: '43 4 * * 1'  # Maandag 06:43 CEST (UTC+2)
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Maak settings.json
+        run: |
+          cat > settings.json << 'EOF'
+          {
+            "imapHost": "${{ secrets.IMAP_HOST }}",
+            "imapPort": "${{ secrets.IMAP_PORT }}",
+            "imapUser": "${{ secrets.IMAP_USER }}",
+            "imapPass": "${{ secrets.IMAP_PASS }}",
+            "imapUser2": "${{ secrets.IMAP_USER2 }}",
+            "imapPass2": "${{ secrets.IMAP_PASS2 }}",
+            "notionToken": "${{ secrets.NOTION_TOKEN }}",
+            "notionDbId": "${{ secrets.NOTION_DB_ID }}",
+            "anthropicKey": "${{ secrets.ANTHROPIC_KEY }}",
+            "alertThreshold": ${{ secrets.ALERT_THRESHOLD }},
+            "supabaseUrl": "${{ secrets.SUPABASE_URL }}",
+            "supabaseKey": "${{ secrets.SUPABASE_KEY }}",
+            "tebiToken": ""
+          }
+          EOF
+
+      - name: Scan afzenders
+        run: node src/scan-afzenders.js
