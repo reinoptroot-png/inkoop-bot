@@ -10,6 +10,7 @@ require('dotenv').config();
 const { Client } = require('@notionhq/client');
 const NotionSync = require('./notion-sync');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 
 (async () => {
   const dryRun = process.argv.includes('--dry-run');
@@ -48,7 +49,7 @@ const { createClient } = require('@supabase/supabase-js');
   console.log(`[herclassificeer] ${gewijzigd} ${dryRun ? 'zouden wijzigen' : 'gewijzigd'}, ${ongewijzigd} ongewijzigd, ${geenClassificatie} zonder classificatie`);
 
   if (!dryRun && process.env.SUPABASE_URL && (process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY)) {
-    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY);
+    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY, { global: { WebSocket: ws } });
     const m = await notion.mirrorNaarSupabase(sb);
     console.log(`[herclassificeer] ${m?.count ?? 0} ingrediënten gespiegeld naar Supabase`);
   }

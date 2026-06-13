@@ -3,6 +3,7 @@ const { simpleParser } = require('mailparser');
 const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 const { isLightspeedDagrapport, extractCsvLink, parseDagrapport } = require('./lightspeed');
 
 // Strikte whitelist: Supabase `leveranciers` (actief=true) is de ENIGE bron van
@@ -16,7 +17,7 @@ async function loadKnownSenders(settings) {
     return {};
   }
   try {
-    const sb = createClient(url, key);
+    const sb = createClient(url, key, { global: { WebSocket: ws } });
     const { data, error } = await sb.from('leveranciers').select('naam, email').eq('actief', true);
     if (error) {
       console.warn('[scan] ⚠ leveranciers niet geladen:', error.message, '— geen emails verwerkt.');
@@ -84,7 +85,7 @@ function lijktFoodLeverancier(parsed) {
 async function schrijfNieuweLeverancierMeldingen(url, key, kandidaten) {
   if (!url || !key || !kandidaten || kandidaten.length === 0) return 0;
   try {
-    const sb = createClient(url, key);
+    const sb = createClient(url, key, { global: { WebSocket: ws } });
     const { data: levs } = await sb.from('leveranciers').select('email');
     const whitelist = new Set((levs || []).map(l => (l.email || '').toLowerCase().trim()).filter(Boolean));
     const { data: bestaand } = await sb.from('scan_meldingen').select('leverancier').eq('type', 'nieuwe_leverancier');
