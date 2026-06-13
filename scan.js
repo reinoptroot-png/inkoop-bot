@@ -27,6 +27,7 @@ const settings = {
   imapPass:        process.env.IMAP_PASS         || _sf.imapPass,
   imapUser2:       process.env.IMAP_USER2        || _sf.imapUser2,
   imapPass2:       process.env.IMAP_PASS2        || _sf.imapPass2,
+  imapHost2:       process.env.IMAP_HOST2        || _sf.imapHost2       || null,
   notionToken:     process.env.NOTION_TOKEN      || _sf.notionToken,
   notionDbId:      process.env.NOTION_DB_ID      || _sf.notionDbId      || 'b6258a232e6d4482b7b4f50cf449854f',
   anthropicKey:    process.env.ANTHROPIC_API_KEY || _sf.anthropicKey,
@@ -54,10 +55,26 @@ async function run() {
   let items2 = [];
   let scanner2 = null;
   if (settings.imapUser2 && settings.imapPass2) {
-    console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', settings.imapHost);
-    scanner2 = new ImapScanner({ ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2 });
-    items2 = await scanner2.scan({ markSeen: !dryRun, reprocess });
-    console.log('IMAP 2 OK —', items2.length, 'producten');
+    const host2 = settings.imapHost2 || settings.imapHost;
+    console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', host2);
+    const cfg2 = { ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2, imapHost: host2 };
+    let imap2Ok = false;
+    for (let poging = 1; poging <= 3; poging++) {
+      try {
+        scanner2 = new ImapScanner(cfg2);
+        items2 = await scanner2.scan({ markSeen: !dryRun, reprocess });
+        console.log('IMAP 2 OK —', items2.length, 'producten');
+        imap2Ok = true;
+        break;
+      } catch (e) {
+        console.warn(`IMAP 2 poging ${poging}/3 mislukt: ${e.message}`);
+        if (poging < 3) await new Promise(r => setTimeout(r, 5000 * poging));
+      }
+    }
+    if (!imap2Ok) {
+      console.warn('⚠️  IMAP 2 (europa.rest) overgeslagen na 3 pogingen — scan gaat door zonder tweede mailbox');
+      scanner2 = null;
+    }
   }
 
   // Nieuwe food-leverancier kandidaten → meldingen (dedup gebeurt in de helper)

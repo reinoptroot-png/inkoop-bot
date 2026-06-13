@@ -29,6 +29,7 @@ jobs:
             "imapPass": "${{ secrets.IMAP_PASS }}",
             "imapUser2": "${{ secrets.IMAP_USER2 }}",
             "imapPass2": "${{ secrets.IMAP_PASS2 }}",
+            "imapHost2": "${{ secrets.IMAP_HOST2 }}",
             "notionToken": "${{ secrets.NOTION_TOKEN }}",
             "notionDbId": "${{ secrets.NOTION_DB_ID }}",
             "anthropicKey": "${{ secrets.ANTHROPIC_KEY }}",
