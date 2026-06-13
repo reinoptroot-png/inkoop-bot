@@ -18,7 +18,7 @@ const ws = require('ws');
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!url || !key) { console.error('[afzenders] Supabase niet geconfigureerd (SUPABASE_URL/SUPABASE_ANON_KEY)'); process.exit(1); }
-  const sb = createClient(url, key, { realtime: { transport: ws } });
+  const sb = createClient(url, key, { global: { fetch: fetch, WebSocket: ws } });
 
   // Whitelist laden om bekende afzenders uit te sluiten
   const { data: levs, error: levErr } = await sb.from('leveranciers').select('email');
