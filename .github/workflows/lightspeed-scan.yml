@@ -42,3 +42,17 @@ jobs:
 
       - name: Dagrapport scannen
         run: node scan.js
+        env:
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS }}
+          IMAP_USER2: ${{ secrets.IMAP_USER2 }}
+          IMAP_PASS2: ${{ secrets.IMAP_PASS2 }}
+          IMAP_HOST2: ${{ secrets.IMAP_HOST2 }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          ALERT_THRESHOLD: ${{ secrets.ALERT_THRESHOLD }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
