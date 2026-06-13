@@ -14,8 +14,8 @@ let _sf = {};
 try { _sf = JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); } catch {}
 
 const settings = {
-  supabaseUrl:      process.env.SUPABASE_URL       || _sf.supabaseUrl,
-  supabaseKey:      process.env.SUPABASE_KEY        || _sf.supabaseKey,
+  supabaseUrl:      _sf.supabaseUrl                 || process.env.SUPABASE_URL,
+  supabaseKey:      _sf.supabaseKey                 || process.env.SUPABASE_KEY,
   tebiToken:        process.env.TEBI_TOKEN          || _sf.tebiToken,
   tebiRefreshToken: process.env.TEBI_REFRESH_TOKEN  || _sf.tebiRefreshToken,
 };
@@ -61,7 +61,7 @@ async function run() {
 
   console.log(`Omzet: €${dr.totale_omzet ?? '?'} | Gasten: ${dr.aantal_gasten ?? '?'} | Tafels: ${dr.aantal_tafels ?? '?'} | Gerechten: ${dr.gerechten.length}`);
 
-  const sb = createClient(settings.supabaseUrl, settings.supabaseKey, { realtime: { transport: ws } });
+  const sb = createClient(settings.supabaseUrl, settings.supabaseKey, { global: { WebSocket: ws } });
   const { error } = await sb.from('dagrapport').upsert({
     datum: dr.datum, restaurant: 'europa',
     totale_omzet: dr.totale_omzet, bar_omzet: dr.bar_omzet, keuken_omzet: dr.keuken_omzet,
