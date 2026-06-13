@@ -133,6 +133,17 @@ async function run() {
 
   const notion = new NotionSync(settings);
 
+  // Lerende non-food blacklist uit Supabase laden (groeit als app ingrediënten
+  // archiveert). Geblacklistte producten worden wél naar Supabase gespiegeld,
+  // maar genereren géén prijs- of mutatiemeldingen (incl. mogelijk_dubbel).
+  let learnedBlacklist = [];
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('non_food_blacklist').select('naam');
+      if (!error && data) learnedBlacklist = data.map(r => r.naam);
+    } catch (e) { console.warn('[blacklist] non_food_blacklist niet geladen:', e.message); }
+  }
+
   // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen). Draait bij
   // elke scan, ook als er geen nieuwe facturen zijn (vangt handmatige edits mee).
   async function spiegelNaarSupabase() {
@@ -149,7 +160,7 @@ async function run() {
       else if (m?.count != null) console.log(`[inkoop-bot] ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
     } catch (e) { console.warn('[mirror] fout:', e.message); }
     try {
-      const d = await notion.detecteerDubbels(supabase);
+      const d = await notion.detecteerDubbels(supabase, learnedBlacklist);
       if (d?.count) console.log(`[inkoop-bot] ${d.count} mogelijk-dubbel melding(en) aangemaakt`);
     } catch (e) { console.warn('[dubbel] fout:', e.message); }
   }
@@ -158,15 +169,6 @@ async function run() {
     console.log('[inkoop-bot] Geen nieuwe facturen gevonden.');
     await spiegelNaarSupabase();
     return;
-  }
-
-  // Lerende non-food blacklist uit Supabase laden (groeit als app ingrediënten archiveert)
-  let learnedBlacklist = [];
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from('non_food_blacklist').select('naam');
-      if (!error && data) learnedBlacklist = data.map(r => r.naam);
-    } catch (e) { console.warn('[blacklist] non_food_blacklist niet geladen:', e.message); }
   }
 
   // HSN-leverancier, non-food en lerende blacklist weren vóór verwerking

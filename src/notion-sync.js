@@ -388,9 +388,11 @@ class NotionSync {
   // Detecteer mogelijke dubbelen: ingrediënten die sterk op elkaar lijken
   // (fuzzy >85%) én dezelfde leverancier hebben. Schrijft per nieuw paar een
   // `mogelijk_dubbel` melding naar Supabase scan_meldingen (dedup op naam-paar).
-  async detecteerDubbels(supabase) {
+  async detecteerDubbels(supabase, blacklist = []) {
     if (!supabase) return { count: 0 };
     const prices = await this.getAllPrices();
+    // Geblacklistte (non-food) producten genereren geen mutatiemeldingen.
+    const blacklistSet = new Set((blacklist || []).map(s => (s || '').toLowerCase().trim()).filter(Boolean));
     let bestaande = [];
     try {
       const { data } = await supabase.from('scan_meldingen').select('ingredient_naam, scan_naam').eq('type', 'mogelijk_dubbel');
@@ -401,6 +403,9 @@ class NotionSync {
     for (let i = 0; i < prices.length; i++) {
       for (let j = i + 1; j < prices.length; j++) {
         const a = prices[i], b = prices[j];
+        // Sla paren over waarvan één kant op de blacklist staat — geen melding.
+        if (blacklistSet.has((a.name || '').toLowerCase().trim()) ||
+            blacklistSet.has((b.name || '').toLowerCase().trim())) continue;
         const levA = (a.leverancier || '').toLowerCase().trim();
         const levB = (b.leverancier || '').toLowerCase().trim();
         if (!levA || levA !== levB) continue; // zelfde leverancier vereist
