@@ -23,24 +23,34 @@ jobs:
         run: npx playwright install chromium --with-deps
 
       - name: Maak settings.json
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          ALERT_THRESHOLD: ${{ secrets.ALERT_THRESHOLD }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASS: ${{ secrets.IMAP_PASS }}
         run: |
-          cat > settings.json << 'EOF'
-          {
-            "imapHost": "${{ secrets.IMAP_HOST }}",
-            "imapPort": "${{ secrets.IMAP_PORT }}",
-            "imapUser": "${{ secrets.IMAP_USER }}",
-            "imapPass": "${{ secrets.IMAP_PASS }}",
-            "imapUser2": "${{ secrets.IMAP_USER2 }}",
-            "imapPass2": "${{ secrets.IMAP_PASS2 }}",
-            "notionToken": "${{ secrets.NOTION_TOKEN }}",
-            "notionDbId": "${{ secrets.NOTION_DB_ID }}",
-            "anthropicKey": "${{ secrets.ANTHROPIC_KEY }}",
-            "alertThreshold": ${{ secrets.ALERT_THRESHOLD || 10 }},
-            "supabaseUrl": "${{ secrets.SUPABASE_URL }}",
-            "supabaseKey": "${{ secrets.SUPABASE_KEY }}",
-            "tebiToken": ""
-          }
-          EOF
+          node -e "
+            const s = {
+              supabaseUrl: process.env.SUPABASE_URL || '',
+              supabaseKey: process.env.SUPABASE_KEY || '',
+              notionToken: process.env.NOTION_TOKEN || '',
+              notionDbId: process.env.NOTION_DB_ID || '',
+              anthropicKey: process.env.ANTHROPIC_KEY || '',
+              alertThreshold: Number(process.env.ALERT_THRESHOLD) || 10,
+              imapHost: process.env.IMAP_HOST || '',
+              imapPort: Number(process.env.IMAP_PORT) || 993,
+              imapUser: process.env.IMAP_USER || '',
+              imapPass: process.env.IMAP_PASS || '',
+              tebiToken: ''
+            };
+            require('fs').writeFileSync('settings.json', JSON.stringify(s));
+          "
 
       - name: Token ophalen
         run: node tebi-token-refresh.js
