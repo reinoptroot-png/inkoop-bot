@@ -35,7 +35,7 @@ jobs:
             "notionToken": "${{ secrets.NOTION_TOKEN }}",
             "notionDbId": "${{ secrets.NOTION_DB_ID }}",
             "anthropicKey": "${{ secrets.ANTHROPIC_KEY }}",
-            "alertThreshold": ${{ secrets.ALERT_THRESHOLD }},
+            "alertThreshold": ${{ secrets.ALERT_THRESHOLD || 10 }},
             "supabaseUrl": "${{ secrets.SUPABASE_URL }}",
             "supabaseKey": "${{ secrets.SUPABASE_KEY }}",
             "tebiToken": ""
