@@ -615,7 +615,8 @@ class NotionSync {
           seizoen: seizoenMatch ? seizoenMatch[1].trim() : '',
           is_drank: props['Is drank']?.checkbox || false,
           raw_data: props['Raw data']?.rich_text?.[0]?.plain_text || '',
-          gram_per_inkoopeenheid: props['Gram per inkoopeenheid']?.number ?? null,
+          gram_per_inkoopeenheid: props['Gram per inkoopeenheid']?.number
+            ?? parseGramPerInkoopeenheid(props['Inkoopeenheid']?.rich_text?.[0]?.plain_text || ''),
           laatste_update: props['Laatste update']?.last_edited_time || page.last_edited_time || null,
           updated_at: runTs,
         });
