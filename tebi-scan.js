@@ -6,6 +6,7 @@
 const path = require('path');
 const fs   = require('fs');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 const { fetchTebiDayOverviewAuto, parseTebiDayOverview } = require('./src/tebi');
 
 const SETTINGS = path.join(__dirname, 'settings.json');
@@ -60,7 +61,7 @@ async function run() {
 
   console.log(`Omzet: €${dr.totale_omzet ?? '?'} | Gasten: ${dr.aantal_gasten ?? '?'} | Tafels: ${dr.aantal_tafels ?? '?'} | Gerechten: ${dr.gerechten.length}`);
 
-  const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+  const sb = createClient(settings.supabaseUrl, settings.supabaseKey, { realtime: { transport: ws } });
   const { error } = await sb.from('dagrapport').upsert({
     datum: dr.datum, restaurant: 'europa',
     totale_omzet: dr.totale_omzet, bar_omzet: dr.bar_omzet, keuken_omzet: dr.keuken_omzet,
