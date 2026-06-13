@@ -47,3 +47,6 @@ jobs:
 
       - name: Dagrapport scannen
         run: node tebi-scan.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY }}

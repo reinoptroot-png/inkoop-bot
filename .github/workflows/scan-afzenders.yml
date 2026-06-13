@@ -41,3 +41,6 @@ jobs:
 
       - name: Scan afzenders
         run: node src/scan-afzenders.js
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_KEY }}
