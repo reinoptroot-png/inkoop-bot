@@ -1,9 +1,10 @@
+# UITGESCHAKELD — one.com blokkeert GitHub Actions datacenter IPs via IMAP.
+# Deze scan draait via cronjob op de restaurant Mac (07:15 CEST).
+# Zie SPEC.md: "IMAP scans draaien op de Mac, niet via GitHub Actions."
 name: Inbox overzicht
 
 on:
-  schedule:
-    - cron: '15 5 * * *'  # 07:15 CEST (UTC+2)
-  workflow_dispatch:
+  workflow_dispatch:  # alleen handmatig, geen automatische schedule
 
 jobs:
   scan:
