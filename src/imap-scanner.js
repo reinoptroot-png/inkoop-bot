@@ -108,6 +108,46 @@ async function schrijfNieuweLeverancierMeldingen(url, key, kandidaten) {
   } catch (e) { console.warn('[nieuwe-lev] fout:', e.message); return 0; }
 }
 
+// Datum → YYYY-MM-DD (of null bij ongeldige datum).
+function ymdDate(d) {
+  try { const z = new Date(d); return isNaN(z) ? null : z.toISOString().split('T')[0]; } catch { return null; }
+}
+
+// Bouw per factuur één totaalrij uit de losse factuurregels (vóór de dedup op
+// productnaam, anders zijn de regelbedragen al weg). Per factuurnr: totaalbedrag
+// = het expliciete factuurtotaal als dat op de factuur stond (incl. btw), anders
+// de som van de netto regelbedragen (excl. btw). Het btw_inclusief-vlag labelt
+// welke van de twee het is. Retourneert rijen klaar voor upsert op factuurnr.
+function aggregeerFacturen(regels) {
+  const map = {};
+  for (const r of (regels || [])) {
+    const fnr = String(r.factuurnummer || '').trim();
+    if (!fnr) continue;
+    if (!map[fnr]) map[fnr] = { factuurnr: fnr, leverancier: r.leverancier || '', factuurdatum: r.factuurdatum || r.emailDatum || null, regelsom: 0, aantal_regels: 0, factuurtotaal: null };
+    const f = map[fnr];
+    const rb = Number(r.regelbedrag);
+    if (isFinite(rb) && rb > 0) f.regelsom += rb;
+    f.aantal_regels++;
+    if (!f.factuurdatum && (r.factuurdatum || r.emailDatum)) f.factuurdatum = r.factuurdatum || r.emailDatum;
+    if (!f.leverancier && r.leverancier) f.leverancier = r.leverancier;
+    const ft = Number(r.factuurtotaal);
+    if (isFinite(ft) && ft > 0) f.factuurtotaal = ft;
+  }
+  return Object.values(map).map(f => {
+    const directTotal = f.factuurtotaal != null;
+    const totaal = directTotal ? f.factuurtotaal : (f.regelsom > 0 ? Math.round(f.regelsom * 100) / 100 : null);
+    return {
+      factuurnr: f.factuurnr,
+      leverancier: f.leverancier || null,
+      factuurdatum: f.factuurdatum || null,
+      totaalbedrag: totaal,
+      btw_inclusief: directTotal,
+      aantal_regels: f.aantal_regels,
+      valuta: 'EUR',
+    };
+  }).filter(r => r.totaalbedrag != null);
+}
+
 class ImapScanner {
   constructor(settings) {
     this.settings = settings;
@@ -218,9 +258,10 @@ Hieronder staat de tekst van een factuur of pakbon. Extraheer alle ingrediënten
 Retourneer ALLEEN een JSON array, geen uitleg, geen markdown backticks. Formaat:
 [
   {
-    "ingredient": "naam van het product", "price": 12.50, "eenheid": "kg",
+    "ingredient": "naam van het product", "price": 12.50, "eenheid": "kg", "regelbedrag": 37.50,
     "artikelnummer": "...", "barcode": "...", "omschrijving": "...", "gewicht": "...",
     "verpakking": "...", "btw": "...", "factuurnummer": "...", "ordernummer": "...",
+    "factuurdatum": "2026-06-11", "factuurtotaal": 412.83,
     "herkomst": "...", "kwaliteitsklasse": "...", "temperatuur": "...", "min_bestelling": "..."
   },
   ...
@@ -231,9 +272,12 @@ Regels:
 - "price": de prijs per eenheid (per kg, per liter, per stuk), als getal
 - "eenheid": de eenheid (kg, liter, stuk, etc.)
 - Als de prijs per doos/krat is, bereken dan de prijs per kg/stuk als dat mogelijk is
+- "regelbedrag": het TOTALE bedrag van die factuurregel zoals op de factuur staat (aantal × stukprijs, excl. btw indien de factuur netto regelbedragen toont), als getal. Null als je het niet kunt bepalen.
 - Sla producten over waarbij je de eenheidsprijs niet kunt bepalen
 - Vul de EXTRA velden (artikelnummer, barcode, omschrijving, gewicht, verpakking, btw, factuurnummer, ordernummer, herkomst/land van herkomst, kwaliteitsklasse, temperatuur, min_bestelling) ALLEEN in als ze daadwerkelijk op de factuur staan; laat een veld weg of zet het op null als het er niet staat. Verzin niets.
-- factuurnummer en ordernummer gelden voor de hele factuur — neem ze bij elk item op als ze ergens op de factuur staan.
+- factuurnummer, ordernummer, factuurdatum en factuurtotaal gelden voor de hele factuur — neem ze bij elk item op als ze ergens op de factuur staan.
+- "factuurdatum": de factuurdatum in formaat YYYY-MM-DD. Null als niet zichtbaar.
+- "factuurtotaal": het EINDtotaal van de hele factuur (het te betalen bedrag) als getal, als dat expliciet op de factuur staat. Null als er geen eindtotaal staat.
 
 Factuur tekst:
 ${text.substring(0, 6000)}`;
@@ -300,6 +344,7 @@ ${text.substring(0, 6000)}`;
     log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
     const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
     const allItems = [];
+    const factuurRegels = []; // losse regels (vóór dedup) voor de factuurtotalen
     const nieuweLeveranciers = {};
     const dagrapporten = [];
 
@@ -351,6 +396,11 @@ ${text.substring(0, 6000)}`;
         const items = await this.parsePdfWithClaude(att.content, att.filename, debug);
         log(`[scan] "${att.filename}" → ${items.length} producten gevonden`);
         allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '', leverancier_email: senderAddress })));
+        // Factuurregels apart bewaren (vóór dedup) voor de factuurtotalen
+        for (const i of items) factuurRegels.push({
+          factuurnummer: i.factuurnummer, regelbedrag: i.regelbedrag, factuurtotaal: i.factuurtotaal,
+          factuurdatum: i.factuurdatum, leverancier: leverancier || i.leverancier || '', emailDatum: ymdDate(email.date),
+        });
       }
     }
 
@@ -376,6 +426,9 @@ ${text.substring(0, 6000)}`;
     if (this.nieuweLeveranciers.length) log(`[scan] ${this.nieuweLeveranciers.length} mogelijke nieuwe food-leverancier(s)`);
     this.dagrapporten = dagrapporten;
     if (dagrapporten.length) log(`[scan] ${dagrapporten.length} Lightspeed dagrapport(en)`);
+    // Factuurtotalen (één rij per factuurnr) — side-channel voor inkoop_facturen
+    this.facturen = aggregeerFacturen(factuurRegels);
+    if (this.facturen.length) log(`[scan] ${this.facturen.length} factuur(totalen) berekend`);
     return result;
   }
 }
@@ -384,3 +437,4 @@ module.exports = ImapScanner;
 module.exports.lijktFoodLeverancier = lijktFoodLeverancier;
 module.exports.afzenderNaam = afzenderNaam;
 module.exports.schrijfNieuweLeverancierMeldingen = schrijfNieuweLeverancierMeldingen;
+module.exports.aggregeerFacturen = aggregeerFacturen;

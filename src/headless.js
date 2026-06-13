@@ -131,6 +131,15 @@ async function run() {
     }
   }
 
+  // Factuurtotalen → Supabase inkoop_facturen (echte ingekochte euro's per factuur).
+  // Upsert op factuurnr zodat herhaalde scans dezelfde factuur niet dubbel invoegen.
+  const facturen = scanners.flatMap(s => s.facturen || []);
+  if (facturen.length && supabase) {
+    const { error } = await supabase.from('inkoop_facturen').upsert(facturen, { onConflict: 'factuurnr' });
+    if (error) console.warn('[facturen] schrijffout:', error.message);
+    else console.log(`[inkoop-bot] ${facturen.length} factuurtotaal(en) opgeslagen in inkoop_facturen`);
+  }
+
   const notion = new NotionSync(settings);
 
   // Lerende non-food blacklist uit Supabase laden (groeit als app ingrediënten
