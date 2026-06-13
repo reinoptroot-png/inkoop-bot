@@ -24,6 +24,9 @@ if (!settings.tebiToken && !settings.tebiRefreshToken) {
   console.error('[tebi-scan] Geen Tebi token gevonden — run eerst: node tebi-setup.js');
   process.exit(1);
 }
+console.log('[tebi-scan] supabaseUrl:', settings.supabaseUrl ? settings.supabaseUrl.slice(0, 10) + '…' : '(leeg)');
+console.log('[tebi-scan] supabaseKey:', settings.supabaseKey ? settings.supabaseKey.slice(0, 10) + '…' : '(leeg)');
+console.log('[tebi-scan] settings.json keys:', Object.keys(_sf).join(', ') || '(geen)');
 if (!settings.supabaseUrl || !settings.supabaseKey) {
   console.error('[tebi-scan] Supabase credentials ontbreken');
   process.exit(1);
