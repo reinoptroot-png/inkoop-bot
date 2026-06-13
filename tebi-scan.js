@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Tebi dagrapport scan — draait dagelijks om 07:30 (na Lightspeed-scan om 12:00).
-// Haalt het dagrapport van gisteren op via de Tebi API en slaat het op in Supabase.
-// Vereist: TEBI_SESSION_TOKEN in settings.json of als env var.
+// Tebi dagrapport scan — draait dagelijks om 07:30.
+// Haalt het dagrapport van gisteren op via de Tebi Bearer-token API en slaat op in Supabase.
+// Vereist: tebiToken in settings.json of env var TEBI_TOKEN.
+// Token ophalen: DevTools → Network → XHR op live.tebi.co/api/ → Authorization header.
 
 const path = require('path');
 const fs   = require('fs');
@@ -12,13 +13,14 @@ let _sf = {};
 try { _sf = JSON.parse(fs.readFileSync(path.join(__dirname, 'settings.json'), 'utf8')); } catch {}
 
 const settings = {
-  supabaseUrl:       process.env.SUPABASE_URL          || _sf.supabaseUrl,
-  supabaseKey:       process.env.SUPABASE_KEY          || _sf.supabaseKey,
-  tebiSessionToken:  process.env.TEBI_SESSION_TOKEN    || _sf.tebiSessionToken,
+  supabaseUrl: process.env.SUPABASE_URL  || _sf.supabaseUrl,
+  supabaseKey: process.env.SUPABASE_KEY  || _sf.supabaseKey,
+  tebiToken:   process.env.TEBI_TOKEN    || _sf.tebiToken,
 };
 
-if (!settings.tebiSessionToken) {
-  console.error('[tebi-scan] TEBI_SESSION_TOKEN ontbreekt — voeg toe aan settings.json of env');
+if (!settings.tebiToken) {
+  console.error('[tebi-scan] tebiToken ontbreekt — voeg toe aan settings.json of stel TEBI_TOKEN in');
+  console.error('  Ophalen: open live.tebi.co → DevTools → Network → XHR → Authorization: Bearer <token>');
   process.exit(1);
 }
 if (!settings.supabaseUrl || !settings.supabaseKey) {
@@ -40,7 +42,7 @@ async function run() {
 
   let rawData;
   try {
-    rawData = await fetchTebiDayOverview(datum, settings.tebiSessionToken);
+    rawData = await fetchTebiDayOverview(datum, settings.tebiToken);
   } catch (e) {
     console.error('[tebi-scan] Fetch fout:', e.message);
     process.exit(1);

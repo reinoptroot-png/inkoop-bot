@@ -1,18 +1,20 @@
 // Tebi dagrapport integratie voor Restaurant Europa.
 // Endpoint: GET https://live.tebi.co/api/insights/ledgers/976290/insights/day-overview?date=YYYY-MM-DD
-// Auth: TEBI_SESSION_TOKEN als Cookie-header (browser-sessie token uit Tebi-portal).
+// Auth: Bearer token in Authorization-header (ophalen via DevTools → Network →
+//       XHR-request naar live.tebi.co/api/ → Request Headers → Authorization).
+//       Sla op als tebiToken in settings.json of env var TEBI_TOKEN.
 
 const https = require('https');
 const LEDGER_ID = process.env.TEBI_LEDGER_ID || '976290';
 const BASE = `https://live.tebi.co/api/insights/ledgers/${LEDGER_ID}/insights/day-overview`;
 
-function fetchTebiDayOverview(date, sessionToken) {
+function fetchTebiDayOverview(date, token) {
   return new Promise((resolve, reject) => {
     const url = `${BASE}?date=${date}`;
     const opts = {
       method: 'GET',
       headers: {
-        'Cookie': `session=${sessionToken}`,
+        'Authorization': `Bearer ${token}`,
         'Accept': 'application/json',
         'User-Agent': 'Mozilla/5.0 inkoop-bot',
       },
@@ -22,7 +24,7 @@ function fetchTebiDayOverview(date, sessionToken) {
       res.on('data', d => { body += d; });
       res.on('end', () => {
         if (res.statusCode === 401 || res.statusCode === 403) {
-          return reject(new Error(`Tebi auth mislukt (${res.statusCode}) — controleer TEBI_SESSION_TOKEN`));
+          return reject(new Error(`Tebi auth mislukt (${res.statusCode}): ${body.trim()} — ververs TEBI_TOKEN in settings.json`));
         }
         if (res.statusCode === 404) {
           return resolve(null); // geen data voor deze datum (bijv. gesloten)
@@ -56,44 +58,51 @@ function pick(obj, ...keys) {
 function parseTebiDayOverview(data, datum) {
   if (!data) return null;
 
-  // Tebi stuurt de data doorgaans in een genest object; meerdere mogelijke
-  // structuren worden hieronder geprobeerd (generiek → specifiek).
+  // Tebi stuurt de data in een genest object; probeer meerdere structuren.
   const root = data.data || data.overview || data.dayOverview || data;
 
-  // Omzetten: top-level totaal
   const totale_omzet = pick(root,
-    'totalRevenue', 'total_revenue', 'totalIncome', 'omzet', 'revenue', 'gross');
+    'totalRevenue', 'total_revenue', 'totalIncome', 'omzet', 'revenue', 'gross',
+    'totalNet', 'total_net', 'netRevenue');
 
-  // Bar/drank (optioneel — Tebi splitst misschien niet altijd)
   const barSection = root.bar || root.drinks || root.beverage || root.dranken || null;
   const bar_omzet = barSection
-    ? pick(barSection, 'totalRevenue', 'total_revenue', 'revenue', 'total')
-    : pick(root, 'barRevenue', 'bar_revenue', 'drankenOmzet', 'beverageRevenue');
+    ? pick(barSection, 'totalRevenue', 'total_revenue', 'revenue', 'total', 'totalNet')
+    : pick(root, 'barRevenue', 'bar_revenue', 'drankenOmzet', 'beverageRevenue', 'bar_total');
 
-  // Keuken/food
   const kitchenSection = root.kitchen || root.food || root.keuken || null;
   const keuken_omzet = kitchenSection
-    ? pick(kitchenSection, 'totalRevenue', 'total_revenue', 'revenue', 'total')
-    : pick(root, 'kitchenRevenue', 'kitchen_revenue', 'keukenOmzet', 'foodRevenue');
+    ? pick(kitchenSection, 'totalRevenue', 'total_revenue', 'revenue', 'total', 'totalNet')
+    : pick(root, 'kitchenRevenue', 'kitchen_revenue', 'keukenOmzet', 'foodRevenue', 'food_total');
 
-  // Gasten en tafels
   const aantal_gasten = pick(root,
-    'guestCount', 'guest_count', 'covers', 'couverts', 'customers', 'gasten', 'numberOfGuests');
+    'guestCount', 'guest_count', 'covers', 'couverts', 'customers', 'gasten',
+    'numberOfGuests', 'number_of_guests', 'pax');
   const aantal_tafels = pick(root,
-    'tableCount', 'table_count', 'tables', 'tafels', 'numberOfTables');
+    'tableCount', 'table_count', 'tables', 'tafels', 'numberOfTables', 'number_of_tables');
 
-  // Gerechten — probeer meerdere mogelijke array-sleutels
-  const rawItems = root.items || root.products || root.dishes ||
-    root.menuItems || root.orderLines || root.categories?.flatMap?.(c => c.items || []) || [];
+  // Gerechten: probeer meerdere array-sleutels; flatMap over categories indien nodig
+  const rawItems =
+    root.items ||
+    root.products ||
+    root.dishes ||
+    root.menuItems ||
+    root.menu_items ||
+    root.orderLines ||
+    root.order_lines ||
+    (Array.isArray(root.categories)
+      ? root.categories.flatMap(c => c.items || c.products || c.dishes || [])
+      : null) ||
+    [];
 
   const gerechten = (Array.isArray(rawItems) ? rawItems : [])
     .map(item => {
-      const naam = String(item.name || item.naam || item.productName || item.title || '').trim();
+      const naam = String(item.name || item.naam || item.productName || item.product_name || item.title || '').trim();
       if (!naam) return null;
-      const aantal = pick(item, 'quantity', 'count', 'aantal', 'qty', 'sold');
-      const prijs  = pick(item, 'price', 'unitPrice', 'unit_price', 'prijs');
-      const totaal = pick(item, 'total', 'totalRevenue', 'total_revenue', 'totaal', 'revenue');
-      const categorie = String(item.category || item.categoryName || item.categorie || '').trim();
+      const aantal = pick(item, 'quantity', 'count', 'aantal', 'qty', 'sold', 'amount');
+      const prijs  = pick(item, 'price', 'unitPrice', 'unit_price', 'prijs', 'unitNet', 'unit_net');
+      const totaal = pick(item, 'total', 'totalRevenue', 'total_revenue', 'totaal', 'revenue', 'totalNet', 'net');
+      const categorie = String(item.category || item.categoryName || item.category_name || item.categorie || '').trim();
       const type = String(item.categoryType || item.category_type || item.type || '').trim();
       return {
         naam,
