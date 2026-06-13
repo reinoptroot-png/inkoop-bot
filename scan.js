@@ -36,7 +36,7 @@ const settings = {
   supabaseKey:     process.env.SUPABASE_KEY      || _sf.supabaseKey,
 };
 
-const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass: 'IMAP_PASS', anthropicKey: 'ANTHROPIC_API_KEY' };
+const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass: 'IMAP_PASS', anthropicKey: 'ANTHROPIC_KEY (of ANTHROPIC_API_KEY)' };
 for (const [key, env] of Object.entries(required)) {
   if (!settings[key]) throw new Error(`Ontbrekende instelling "${key}" — stel env var ${env} in of voeg toe aan settings.json`);
 }
