@@ -1,0 +1,32 @@
+name: Lightspeed (PosiOS) dagrapport scan
+
+on:
+  schedule:
+    - cron: '35 5 * * *'  # 07:35 CEST (UTC+2) — na de Tebi-scan
+  workflow_dispatch:
+    inputs:
+      datum:
+        description: 'Datum (YYYY-MM-DD), leeg = gisteren'
+        required: false
+        default: ''
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Dagrapport scannen (PosiOS)
+        run: node lightspeed-posios-scan.js ${{ inputs.datum }}
+        env:
+          LS_POS_TOKEN: ${{ secrets.LS_POS_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

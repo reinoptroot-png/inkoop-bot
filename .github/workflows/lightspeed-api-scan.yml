@@ -1,8 +1,10 @@
-name: Lightspeed API dagrapport scan
+name: Lightspeed API dagrapport scan (K-Series — ACHTERHAALD)
 
-# Vervangt lightspeed-scan.yml (IMAP-pad, uitgeschakeld: one.com blokkeert GitHub IPs).
-# Haalt verkoopdata direct op via de Lightspeed Restaurant K-Series REST API.
-# Geen IMAP of e-mail nodig — werkt vanuit GitHub Actions zonder IP-blokkade.
+# ACHTERHAALD: deze K-Series REST API-route is niet van toepassing. De vestiging
+# draait op Lightspeed Restaurant L-Series (PosiOS) — zie lightspeed-posios-scan.yml.
+# Schedule verwijderd zodat dit niet dagelijks faalt; handmatig starten blijft mogelijk.
+#
+# (historisch) Haalt verkoopdata op via de Lightspeed Restaurant K-Series REST API.
 #
 # Vereiste GitHub secrets (Settings → Secrets → Actions):
 #   SUPABASE_URL             — https://viqxafualoybzuycsked.supabase.co
@@ -15,9 +17,7 @@ name: Lightspeed API dagrapport scan
 # Éénmalige setup: node lightspeed-api-setup.js (op de Mac, daarna automatisch via deze workflow).
 
 on:
-  schedule:
-    - cron: '0 6 * * *'  # 08:00 CEST (UTC+2) — na middernacht-afsluiting Lightspeed
-  workflow_dispatch:
+  workflow_dispatch:    # schedule verwijderd — achterhaald (zie lightspeed-posios-scan.yml)
     inputs:
       datum:
         description: 'Datum (YYYY-MM-DD, leeg = gisteren)'
