@@ -53,16 +53,30 @@ async function main() {
 
     // pressSequentially i.p.v. fill: de submit-knop is disabled tot het formulier
     // geldig is, en controlled inputs registreren alleen echte toetsaanslagen.
-    await page.locator('#username, input[name="username"]').click({ timeout: 15000 });
-    await page.locator('#username, input[name="username"]').pressSequentially(USER, { delay: 15 });
-    await page.locator('#password, input[name="password"]').click({ timeout: 15000 });
-    await page.locator('#password, input[name="password"]').pressSequentially(PASS, { delay: 15 });
-    // Wacht tot de knop actief is, klik; val terug op Enter.
+    const uSel = '#username, input[name="username"]';
+    const pSel = '#password, input[name="password"]';
+    await page.waitForSelector(uSel, { state: 'visible', timeout: 15000 });
+    await page.locator(uSel).first().click();
+    await page.locator(uSel).first().fill(USER);
+    await page.locator(uSel).first().pressSequentially(' ', { delay: 20 });
+    await page.keyboard.press('Backspace'); // forceer input-events voor Vue-validatie
+    await page.locator(pSel).first().click();
+    await page.locator(pSel).first().fill(PASS);
+    await page.locator(pSel).first().pressSequentially(' ', { delay: 20 });
+    await page.keyboard.press('Backspace');
+
+    const uLen = (await page.locator(uSel).first().inputValue()).length;
+    const pLen = (await page.locator(pSel).first().inputValue()).length;
+    const btnDisabled = (await page.getAttribute('button[type="submit"]', 'disabled')) !== null;
+    console.log(`[ls-login][diag] userLen=${uLen} passLen=${pLen} btnDisabled=${btnDisabled}`);
+
+    // Wacht tot de knop actief is, klik; val terug op Enter in het wachtwoordveld.
     try {
       await page.waitForSelector('button[type="submit"]:not([disabled])', { timeout: 10000 });
       await page.click('button[type="submit"]');
     } catch {
-      await page.locator('#password, input[name="password"]').press('Enter');
+      console.log('[ls-login][diag] knop bleef disabled — Enter als fallback');
+      await page.locator(pSel).first().press('Enter');
     }
 
     // Terug naar de backoffice; daarna verschijnt de sessie-apitoken in sessionStorage.
