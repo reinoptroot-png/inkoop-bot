@@ -140,6 +140,13 @@ async function laadIngredientIndex() {
     }
     const regelInfo = [];
     for (const reg of r.regels) {
+      // Regel zonder hoeveelheid kan geen component zijn (NOT NULL) → naar review.
+      if (reg.hoeveelheid == null) {
+        nReview++;
+        regelInfo.push(`${reg.naam} → review (geen hoeveelheid)`);
+        if (COMMIT && bid) await supabase.from('bereiding_import_review').insert({ bereiding_id: bid, regel_naam: reg.naam, hoeveelheid: null, eenheid: reg.eenheid });
+        continue;
+      }
       // sub-bereidingen van dezelfde locatie krijgen voorrang
       const index = { ingredients: ingredientIndex, bereidingen: bereidingIndex.filter(b => b.locatie === r.locatie && b.namen[0].toLowerCase() !== (r.naam || '').toLowerCase()) };
       const m = matchLokaal(reg.naam, index);
