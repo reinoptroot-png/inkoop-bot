@@ -388,12 +388,15 @@ function normaliseerPrijsPerKg(item) {
     return g ? { ...item, gram_per_inkoopeenheid: g } : item;
   }
   const bron = item.inkoopeenheid || parseInkoopeenheid(item.ingredient) || item.gewicht || item.verpakking;
-  // Verse kruiden per bosje: "circa N gram" is een gescháts bosgewicht, geen
-  // inkoop per kg. Niet normaliseren → prijs blijft per stuk/bos. Voorkomt valse
-  // per-kg alerts (bijv. "tijm, circa 70 gram" €1,27 → €18,14/kg = +1328%).
-  if (/circa/i.test(String(bron)) || /circa/i.test(String(item.ingredient || ''))) return item;
   const gram = parseGramPerInkoopeenheid(bron);
   if (!gram || gram < 10) return item; // niets parsebaars (of ruis) → laat staan
+  // Alleen naar prijs/kg omrekenen bij een BULK-inkoopeenheid: een verpakkingswoord
+  // (kist/doos/krat/bak/emmer/blik/bus/bulk/…) óf een hoeveelheid ≥ 1 kg/liter.
+  // Kleine losse gewichten in de naam ("circa 70 gram", "100gr", "33cl") zijn een
+  // portie-aanduiding van een per-stuk/bos product → niet omrekenen. Voorkomt valse
+  // per-kg alerts zoals "tijm, circa 70 gram" €1,27 → €18,14/kg (+1328%).
+  const heeftVerpakking = /\b(kist|krat|doos|dozen|bak|emmer|blik|bus|can|bulk|pak|pakken|zak|zakken|tray|fles|flacon|pot|rol)\b/i.test(String(bron));
+  if (!heeftVerpakking && gram < 1000) return item;
   return {
     ...item,
     prijs_origineel: item.price,
