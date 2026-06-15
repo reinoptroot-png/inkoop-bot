@@ -62,6 +62,86 @@ function findDedupMatch(naam, price, leverancier, existing) {
   return best ? { match: best, score: bestScore } : null;
 }
 
+// --- Claude Haiku canonical matching ---
+// Vraag Haiku: welke bestaande canonical past bij dit scan-product?
+// Geeft { canonical, pageId, confidence (0-100), uitleg } of null als <30%.
+async function matchCanonicalViaHaiku(item, existing, anthropicKey) {
+  if (!anthropicKey || !existing || !existing.length) return null;
+
+  // Bouw canonicalslijst: unieke canonical_naam waarden met hun paginacontext
+  const canonicalMap = new Map(); // canonical → {pageId, leverancier, price, eenheid, name}
+  for (const e of existing) {
+    const cn = (e.canonical_naam || e.name || '').toLowerCase().trim();
+    if (!cn || canonicalMap.has(cn)) continue;
+    canonicalMap.set(cn, { pageId: e.pageId, leverancier: e.leverancier, price: e.price, eenheid: e.eenheid, name: e.name });
+  }
+  if (!canonicalMap.size) return null;
+
+  const canonicals = [...canonicalMap.keys()];
+  const scanContext = [
+    `naam: ${item.ingredient}`,
+    item.leverancier ? `leverancier: ${item.leverancier}` : null,
+    item.price != null ? `prijs: €${item.price}${item.eenheid ? `/${item.eenheid}` : ''}` : null,
+    item.omschrijving ? `omschrijving: ${item.omschrijving}` : null,
+    item.inkoopeenheid ? `verpakking: ${item.inkoopeenheid}` : null,
+  ].filter(Boolean).join(', ');
+
+  const prompt = `Je bent een ingredient-koppelingsassistent voor een restaurant inkoopsysteem.
+
+Scan-product: ${scanContext}
+
+Bestaande restaurant-canonicals (schone restaurantnamen):
+${canonicals.map((c, i) => `${i + 1}. ${c}`).join('\n')}
+
+Taak: bepaal of dit scan-product overeenkomt met één van de bestaande canonicals.
+Geef terug als JSON object:
+{
+  "canonical": "<exacte canonical naam uit de lijst, of null als geen match>",
+  "confidence": <0-100, hoe zeker je bent>,
+  "uitleg": "<één zin waarom dit product matcht of niet>"
+}
+
+Regels:
+- confidence 95+ = vrijwel zeker hetzelfde product (bijv. "Freiland eieren scharrel" → "eieren")
+- confidence 70-94 = waarschijnlijk hetzelfde maar twijfelachtig (bijv. "biologische verse spinazie" → "spinazie")
+- confidence <70 = geen goede match, zet canonical op null
+- Match NOOIT producten die duidelijk anders zijn (varkensvlees ≠ rund, mozzarella ≠ burrata)
+- Kijk naar de kern van het product, niet naar merk/leverancier/verpakking/kwaliteitsklasse
+
+Retourneer ALLEEN het JSON object, geen markdown, geen uitleg.`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': anthropicKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    const data = await response.json();
+    if (data.error) throw new Error(data.error.message);
+    const raw = (data.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.confidence !== 'number') return null;
+    if (!parsed.canonical || parsed.confidence < 30) return null;
+
+    const cn = (parsed.canonical || '').toLowerCase().trim();
+    const entry = canonicalMap.get(cn);
+    if (!entry) return null;
+
+    return { canonical: cn, pageId: entry.pageId, name: entry.name, confidence: parsed.confidence, uitleg: parsed.uitleg || '' };
+  } catch (e) {
+    console.warn('[matchCanonical] Haiku fout:', e.message);
+    return null;
+  }
+}
+
 // --- Claude Haiku classificatie ---
 async function classifyBatch(products, anthropicKey) {
   const names = products.map(p => p.ingredient.toLowerCase().trim());
@@ -354,9 +434,11 @@ class NotionSync {
         const name = props['Ingredient']?.title?.[0]?.plain_text || '';
         if (!name) continue;
         const aliasRaw = props['Aliassen']?.rich_text?.[0]?.plain_text || '';
+        const canonical = props['Canonical naam']?.rich_text?.[0]?.plain_text || '';
         results.push({
           pageId: page.id,
           name: name.toLowerCase().trim(),
+          canonical_naam: (canonical || name).toLowerCase().trim(),
           price: props['Kostprijs']?.number ?? null,
           eenheid: props['Eenheid']?.rich_text?.[0]?.plain_text || 'kg',
           leverancier: props['Leverancier']?.rich_text?.[0]?.plain_text || '',
@@ -608,6 +690,7 @@ class NotionSync {
         rows.push({
           id: page.id,
           naam,
+          canonical_naam: (props['Canonical naam']?.rich_text?.[0]?.plain_text || naam).toLowerCase().trim(),
           leverancier: props['Leverancier']?.rich_text?.[0]?.plain_text || '',
           kostprijs: props['Kostprijs']?.number ?? null,
           eenheid: props['Eenheid']?.rich_text?.[0]?.plain_text || '',
@@ -629,15 +712,25 @@ class NotionSync {
       cursor = r.has_more ? r.next_cursor : undefined;
     } while (cursor);
 
-    let zonderGram = false; // fallback als de Supabase-kolom (nog) niet bestaat
+    let zonderGram = false;      // fallback als de Supabase-kolom (nog) niet bestaat
+    let zonderCanonical = false; // idem voor canonical_naam
+    const strip = (b) => b.map(({ gram_per_inkoopeenheid, canonical_naam, ...r }) => ({
+      ...r,
+      ...(zonderGram ? {} : { gram_per_inkoopeenheid }),
+      ...(zonderCanonical ? {} : { canonical_naam }),
+    }));
     for (let i = 0; i < rows.length; i += 100) {
-      let batch = rows.slice(i, i + 100);
-      if (zonderGram) batch = batch.map(({ gram_per_inkoopeenheid, ...r }) => r);
-      let { error } = await supabase.from('inkoop_prijzen').upsert(batch, { onConflict: 'id' });
+      const batch = rows.slice(i, i + 100);
+      let { error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'id' });
       if (error && /gram_per_inkoopeenheid/i.test(error.message)) {
         zonderGram = true;
-        console.warn('[mirror] kolom gram_per_inkoopeenheid ontbreekt in Supabase — gespiegeld zonder dit veld. Voer uit in SQL Editor: alter table inkoop_prijzen add column gram_per_inkoopeenheid numeric;');
-        ({ error } = await supabase.from('inkoop_prijzen').upsert(batch.map(({ gram_per_inkoopeenheid, ...r }) => r), { onConflict: 'id' }));
+        console.warn('[mirror] kolom gram_per_inkoopeenheid ontbreekt — gespiegeld zonder dit veld. SQL: alter table inkoop_prijzen add column gram_per_inkoopeenheid numeric;');
+        ({ error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'id' }));
+      }
+      if (error && /canonical_naam/i.test(error.message)) {
+        zonderCanonical = true;
+        console.warn('[mirror] kolom canonical_naam ontbreekt — gespiegeld zonder dit veld. SQL: alter table inkoop_prijzen add column canonical_naam text;');
+        ({ error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'id' }));
       }
       if (error) { console.warn('[mirror] upsert fout:', error.message); return { error: error.message }; }
     }
@@ -686,6 +779,9 @@ class NotionSync {
       'Eenheid': { rich_text: [{ text: { content: item.eenheid || 'kg' } }] },
       'Leverancier': { rich_text: [{ text: { content: item.leverancier || '' } }] },
     };
+    // Canonical naam: schone restaurantnaam, los van leverancier-variant. Voor een
+    // nieuw product is de canonical standaard zijn eigen (al schone) naam.
+    const canonical = (item.canonical_naam || naam).toLowerCase().trim();
     // Optionele velden — alleen toevoegen als ze beschikbaar zijn in het schema
     const rawData = bouwRawData(item);
     const inkoopeenheid = item.inkoopeenheid || parseInkoopeenheid(item.ingredient);
@@ -694,6 +790,7 @@ class NotionSync {
         ...props,
         'Is drank': { checkbox: item.isDrank || false },
         'Categorie': { select: { name: item.categorie || 'droogwaren' } },
+        'Canonical naam': { rich_text: [{ text: { content: canonical } }] },
         'Laatste update': { date: { start: today } },
         ...(inkoopeenheid ? { 'Inkoopeenheid': { rich_text: [{ text: { content: inkoopeenheid } }] } } : {}),
         ...(item.gram_per_inkoopeenheid ? { 'Gram per inkoopeenheid': { number: item.gram_per_inkoopeenheid } } : {}),
@@ -841,6 +938,7 @@ class NotionSync {
 }
 
 module.exports = NotionSync;
+module.exports.matchCanonicalViaHaiku = matchCanonicalViaHaiku;
 module.exports.filterScanItems = filterScanItems;
 module.exports.isNonFood = isNonFood;
 module.exports.isGeblokkeerdeLeverancier = isGeblokkeerdeLeverancier;

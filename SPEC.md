@@ -1,5 +1,70 @@
 # Europizza Calculator — Specificatie
 
+---
+
+## 🧠 KERNPRINCIPE — Lerend canonical ingredient-koppelingsysteem
+
+Het hart van de Euro Scan Bot. Bij **elke scan** is Claude Haiku het ingredient-brein:
+elk onbekend scan-product wordt door Haiku gematcht tegen de bestaande canonicals.
+Geen dubbelen meer door naamvariaties — alle leverancier-varianten zijn aliassen
+onder één schone restaurantnaam (de *canonical*).
+
+### 1. Canonical naam
+- Elk ingredient heeft een **canonical naam**: de schone restaurantnaam (bijv. `eieren`)
+  los van hoe de leverancier het noemt (`Dagverse freiland eieren scharrel 53-63g`).
+- Opgeslagen in Notion Inkoop Prijzen (`Canonical naam`, rich_text) én Supabase
+  (`inkoop_prijzen.canonical_naam`). Notion blijft bron van waarheid.
+- Nieuw product: canonical = de eigen (al schone) naam. Alle scan-varianten worden
+  aliassen onder die ene canonical.
+
+### 2. Haiku matching bij elke scan
+- Bij elk nieuw/onbekend scan-product roept de bot `matchCanonicalViaHaiku()` aan
+  (`src/notion-sync.js`): volledige context (leverancier, prijs, eenheid, omschrijving,
+  verpakking) + de volledige lijst bestaande canonicals gaat mee.
+- Haiku geeft terug: `{ canonical, confidence (0-100), uitleg }`.
+
+### 3. Automatische koppeling bij hoge zekerheid
+| Confidence | Gedrag |
+|---|---|
+| **95%+** | Automatisch koppelen aan canonical (scan-naam als alias), **prijs bijgewerkt**, géén melding |
+| **70-94%** | Melding `koppeling_voorgesteld` (groen) met Haiku-uitleg + **Bevestigen / Afwijzen**. Prijs NIET bijgewerkt tot bevestiging |
+| **<70%** | Bestaande `nieuw_product` melding (blauw) |
+
+### 4. Lerende blacklist
+- Wijst de gebruiker een koppeling af, of markeert een product als non-food, dan
+  onthoudt het systeem dit in Supabase `koppeling_blacklist` (leverancier+scan_naam).
+- Bij toekomstige scans van diezelfde leverancier+naam combinatie slaat de bot
+  Haiku-matching over en behandelt het product als regulier nieuw product.
+- _(Webapp schrijft naar `koppeling_blacklist` bij Afwijzen; de bot leest het.)_
+
+### 5. Prijsupdate op canonical
+- De prijs wordt **altijd** op de canonical bijgewerkt, ongeacht hoe de leverancier
+  het product noemt. Geen dubbelen meer door naamvariaties.
+
+### 6. Confidence log (leergeschiedenis)
+- Per koppeling slaat de bot op in Supabase `koppeling_log`: `scan_naam`, `canonical`,
+  `leverancier`, `confidence`, `haiku_uitleg`, `created_at`.
+- Zichtbaar in het detail paneel van het ingredient als **leergeschiedenis**.
+
+### Datamodel (Supabase — `supabase/canonical_koppeling.sql`)
+- `inkoop_prijzen.canonical_naam text` — gespiegelde canonical
+- `koppeling_log` — confidence-leergeschiedenis per koppeling
+- `koppeling_blacklist (leverancier, scan_naam, reden)` — afgewezen combinaties
+- `scan_meldingen.haiku_uitleg text` — uitleg bij `koppeling_voorgesteld`
+
+### Bot-implementatie
+- `src/notion-sync.js`: `matchCanonicalViaHaiku()`, `canonical_naam` in `getAllPrices()`,
+  `createProduct()` en `mirrorNaarSupabase()`
+- `src/headless.js`: onbekend product → Haiku-match → 95+/70-94/<70 routing,
+  `logConfidence()`, `loadKoppelingBlacklist()`
+
+### Webapp (nog te bouwen, apart repo)
+- `koppeling_voorgesteld` melding renderen (groen, Bevestigen/Afwijzen)
+- Bevestigen → alias + prijs op canonical. Afwijzen → rij in `koppeling_blacklist`
+- Leergeschiedenis (`koppeling_log`) tonen in ingredient-detail paneel
+
+---
+
 ## Navigatie
 Vier tabbladen in de topbar, op elke pagina consistent:
 - **Calculator** → /

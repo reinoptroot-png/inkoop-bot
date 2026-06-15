@@ -34,7 +34,7 @@ async function bestaatAlMelding(data) {
   try {
     let q = supabase.from('scan_meldingen').select('id').eq('type', data.type).limit(1);
     if (data.ingredient_naam != null) q = q.eq('ingredient_naam', data.ingredient_naam);
-    if (data.type === 'mogelijk_dubbel') {
+    if (data.type === 'mogelijk_dubbel' || data.type === 'koppeling_voorgesteld') {
       if (data.scan_naam != null) q = q.eq('scan_naam', data.scan_naam);
     } else if (data.type === 'prijs_groot' || data.type === 'prijs_klein') {
       if (data.prijs_nieuw != null) q = q.eq('prijs_nieuw', data.prijs_nieuw);
@@ -53,6 +53,30 @@ async function schrijfMelding(data) {
   } catch (e) {
     console.warn('[melding] Supabase schrijffout:', e.message);
   }
+}
+
+// Confidence-log: per Haiku-koppeling de leergeschiedenis vastleggen (zichtbaar in
+// het detail paneel van het ingredient). Faalt stil als de tabel nog niet bestaat.
+async function logConfidence({ scan_naam, canonical, leverancier, confidence, haiku_uitleg }) {
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from('koppeling_log').insert({
+      scan_naam, canonical, leverancier: leverancier || '', confidence, haiku_uitleg: haiku_uitleg || '',
+    });
+    if (error && !/koppeling_log/i.test(error.message)) console.warn('[koppeling_log] schrijffout:', error.message);
+  } catch (e) { console.warn('[koppeling_log] fout:', e.message); }
+}
+
+// Lerende koppeling-blacklist: leverancier+scan_naam combinaties die de gebruiker
+// eerder heeft afgewezen (koppeling of non-food). Voor deze combinaties slaat de
+// bot Haiku-matching over en behandelt het product als regulier nieuw_product.
+async function loadKoppelingBlacklist() {
+  if (!supabase) return new Set();
+  try {
+    const { data, error } = await supabase.from('koppeling_blacklist').select('leverancier, scan_naam');
+    if (error || !data) return new Set();
+    return new Set(data.map(r => `${(r.leverancier || '').toLowerCase().trim()}::${(r.scan_naam || '').toLowerCase().trim()}`));
+  } catch { return new Set(); }
 }
 
 const settings = {
@@ -152,6 +176,9 @@ async function run() {
       if (!error && data) learnedBlacklist = data.map(r => r.naam);
     } catch (e) { console.warn('[blacklist] non_food_blacklist niet geladen:', e.message); }
   }
+
+  // Lerende koppeling-blacklist (afgewezen leverancier+naam combinaties)
+  const koppelingBlacklist = await loadKoppelingBlacklist();
 
   // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen). Draait bij
   // elke scan, ook als er geen nieuwe facturen zijn (vangt handmatige edits mee).
@@ -268,8 +295,53 @@ async function run() {
         }
       }
     } else {
-      // Nieuw product: verzamelen → straks in batch classificeren (categorie/is_drank)
-      nieuweItems.push(item);
+      // Onbekend product → Claude Haiku ingredient-brein: matcht dit met een
+      // bestaande canonical? Geef volledige context + alle canonicals mee.
+      const blKey = `${(item.leverancier || '').toLowerCase().trim()}::${naam}`;
+      if (koppelingBlacklist.has(blKey)) {
+        // Eerder afgewezen → geen Haiku, behandel als regulier nieuw product
+        nieuweItems.push(item);
+        continue;
+      }
+
+      let match = null;
+      try { match = await NotionSync.matchCanonicalViaHaiku(item, notionPrices, settings.anthropicKey); }
+      catch (e) { console.warn('[canonical] Haiku match fout:', e.message); }
+
+      if (match && match.confidence >= 95) {
+        // ≥95% → automatisch koppelen aan canonical, prijs bijgewerkt, geen melding
+        const target = naamMap[match.canonical] || notionPrices.find(p => p.pageId === match.pageId);
+        if (target) {
+          await notion.addAlias(target.pageId, target.aliassen || [], naam);
+          await notion.updatePriceOnly(target.pageId, item.price, item.leverancier, target.leverancier, NotionSync.bouwRawData(item), item.gram_per_inkoopeenheid || null);
+          naamMap[naam] = target;
+          await logConfidence({ scan_naam: naam, canonical: match.canonical, leverancier: item.leverancier, confidence: match.confidence, haiku_uitleg: match.uitleg });
+          console.log(`  🤖 AUTO-KOPPEL (${match.confidence}%): "${naam}" → canonical "${match.canonical}" — ${match.uitleg}`);
+          continue;
+        }
+        nieuweItems.push(item);
+      } else if (match && match.confidence >= 70) {
+        // 70-94% → koppeling voorgesteld (groen), wacht op Bevestigen/Afwijzen.
+        // Prijs NIET bijwerken tot bevestiging.
+        await logConfidence({ scan_naam: naam, canonical: match.canonical, leverancier: item.leverancier, confidence: match.confidence, haiku_uitleg: match.uitleg });
+        await schrijfMelding({
+          type: 'koppeling_voorgesteld',
+          ingredient_naam: match.canonical,
+          scan_naam: naam,
+          leverancier: item.leverancier || '',
+          prijs_nieuw: item.price,
+          wijziging_pct: match.confidence,
+          haiku_uitleg: match.uitleg,
+          bestaand_page_id: match.pageId,
+          status: 'pending',
+          gelezen: false,
+        });
+        console.log(`  🔗 VOORSTEL (${match.confidence}%): "${naam}" → "${match.canonical}" — ${match.uitleg}`);
+      } else {
+        // <70% → regulier nieuw product
+        if (match) await logConfidence({ scan_naam: naam, canonical: match.canonical, leverancier: item.leverancier, confidence: match.confidence, haiku_uitleg: match.uitleg });
+        nieuweItems.push(item);
+      }
     }
   }
 
