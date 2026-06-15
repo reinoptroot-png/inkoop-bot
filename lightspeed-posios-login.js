@@ -58,12 +58,17 @@ async function main() {
     await page.waitForSelector(uSel, { state: 'visible', timeout: 15000 });
     await page.locator(uSel).first().click();
     await page.locator(uSel).first().fill(USER);
-    await page.locator(uSel).first().pressSequentially(' ', { delay: 20 });
-    await page.keyboard.press('Backspace'); // forceer input-events voor Vue-validatie
+    await page.keyboard.press('Tab');                 // blur → Vue-validatie username
     await page.locator(pSel).first().click();
     await page.locator(pSel).first().fill(PASS);
-    await page.locator(pSel).first().pressSequentially(' ', { delay: 20 });
-    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Tab');                 // blur → Vue-validatie password
+    // Extra zekerheid: dispatch input/change/blur events op beide velden.
+    await page.evaluate(({ u, p }) => {
+      for (const sel of [u, p]) {
+        const el = document.querySelector(sel);
+        if (el) for (const ev of ['input', 'change', 'blur']) el.dispatchEvent(new Event(ev, { bubbles: true }));
+      }
+    }, { u: '#username', p: '#password' });
 
     const uLen = (await page.locator(uSel).first().inputValue()).length;
     const pLen = (await page.locator(pSel).first().inputValue()).length;
