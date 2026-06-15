@@ -388,6 +388,10 @@ function normaliseerPrijsPerKg(item) {
     return g ? { ...item, gram_per_inkoopeenheid: g } : item;
   }
   const bron = item.inkoopeenheid || parseInkoopeenheid(item.ingredient) || item.gewicht || item.verpakking;
+  // Verse kruiden per bosje: "circa N gram" is een gescháts bosgewicht, geen
+  // inkoop per kg. Niet normaliseren → prijs blijft per stuk/bos. Voorkomt valse
+  // per-kg alerts (bijv. "tijm, circa 70 gram" €1,27 → €18,14/kg = +1328%).
+  if (/circa/i.test(String(bron)) || /circa/i.test(String(item.ingredient || ''))) return item;
   const gram = parseGramPerInkoopeenheid(bron);
   if (!gram || gram < 10) return item; // niets parsebaars (of ruis) → laat staan
   return {
