@@ -29,8 +29,13 @@ const TIMEOUT = 60000;
 async function main() {
   if (!USER || !PASS) { console.error('[ls-login] LS_POS_USER / LS_POS_PASS ontbreken'); process.exit(1); }
 
-  console.log('[ls-login] Browser starten...');
-  const browser = await chromium.launch({ headless: true });
+  // Lightspeed ID is beschermd met Cloudflare Turnstile (anti-bot). De submit-knop
+  // blijft disabled tot Turnstile een token geeft — dat lukt niet headless. Draai
+  // dit script daarom HEADED op een echte Mac (LS_HEADED=1): jij lost Turnstile +
+  // login zelf op, het script pakt daarna de verse token en zet 'm in de secrets.
+  const HEADED = !!process.env.LS_HEADED;
+  console.log(`[ls-login] Browser starten (${HEADED ? 'headed — los login/Turnstile zelf op' : 'headless'})...`);
+  const browser = await chromium.launch({ headless: !HEADED, args: ['--disable-blink-features=AutomationControlled'] });
   const context = await browser.newContext();
   const page = await context.newPage();
 
@@ -49,50 +54,51 @@ async function main() {
     // Backoffice openen → redirect naar Lightspeed ID login (geen sessie in verse context).
     await page.goto(ENTRY, { waitUntil: 'domcontentloaded', timeout: TIMEOUT });
     await page.waitForURL('**id.lightspeed.app/**', { timeout: TIMEOUT });
-    console.log('[ls-login] Loginpagina (Lightspeed ID) — inloggen...');
-
-    // pressSequentially i.p.v. fill: de submit-knop is disabled tot het formulier
-    // geldig is, en controlled inputs registreren alleen echte toetsaanslagen.
     const uSel = '#username, input[name="username"]';
     const pSel = '#password, input[name="password"]';
-    await page.waitForSelector(uSel, { state: 'visible', timeout: 15000 });
-    // Char-voor-char typen (echte key-events) — Vue-validatie enabled de knop alleen
-    // hierop, niet op fill() of losse dispatched events.
-    await page.locator(uSel).first().click();
-    await page.locator(uSel).first().pressSequentially(USER, { delay: 30 });
-    await page.keyboard.press('Tab');
-    await page.locator(pSel).first().click();
-    await page.locator(pSel).first().pressSequentially(PASS, { delay: 30 });
-    await page.keyboard.press('Tab');
 
-    const uLen = (await page.locator(uSel).first().inputValue()).length;
-    const pLen = (await page.locator(pSel).first().inputValue()).length;
-    const btnDisabled = (await page.getAttribute('button[type="submit"]', 'disabled')) !== null;
-    console.log(`[ls-login][diag] userLen=${uLen} passLen=${pLen} btnDisabled=${btnDisabled}`);
-
-    // Wacht tot de knop actief is, klik; val terug op Enter in het wachtwoordveld.
-    try {
-      await page.waitForSelector('button[type="submit"]:not([disabled])', { timeout: 10000 });
-      await page.click('button[type="submit"]');
-    } catch {
-      console.log('[ls-login][diag] knop bleef disabled — Enter als fallback');
-      await page.locator(pSel).first().press('Enter');
+    if (HEADED) {
+      console.log('[ls-login] ➜ Log nu IN HET GEOPENDE VENSTER in (vul je gegevens, los Turnstile op, klik Log in).');
+      console.log('[ls-login]   Ik wacht max 5 minuten tot je in de backoffice bent...');
+    } else {
+      // Headless poging (werkt NIET zolang Cloudflare Turnstile actief is — de
+      // submit-knop blijft disabled tot er een cf-turnstile-response token is).
+      console.log('[ls-login] Loginpagina — invullen (let op: Turnstile blokkeert headless login)...');
+      await page.waitForSelector(uSel, { state: 'visible', timeout: 15000 });
+      await page.locator(uSel).first().click();
+      await page.locator(uSel).first().pressSequentially(USER, { delay: 30 });
+      await page.keyboard.press('Tab');
+      await page.locator(pSel).first().click();
+      await page.locator(pSel).first().pressSequentially(PASS, { delay: 30 });
+      await page.keyboard.press('Tab');
+      try {
+        await page.waitForSelector('button[type="submit"]:not([disabled])', { timeout: 10000 });
+        await page.click('button[type="submit"]');
+      } catch {
+        const turnstile = await page.$('input[name="cf-turnstile-response"]');
+        const val = turnstile ? await turnstile.inputValue().catch(() => '') : null;
+        if (turnstile && !val) {
+          console.error('[ls-login] Submit-knop bleef disabled door Cloudflare Turnstile (anti-bot). Headless login is niet mogelijk; draai met LS_HEADED=1 op een echte Mac.');
+        }
+        await page.locator(pSel).first().press('Enter');
+      }
     }
 
-    // Terug naar de backoffice; daarna verschijnt de sessie-apitoken in sessionStorage.
+    // Wachten tot we (na succesvolle login) in de backoffice zijn; daar verschijnt
+    // de sessie-apitoken in sessionStorage. Headed: ruim de tijd voor handmatige login.
+    const wachtMs = HEADED ? 5 * 60 * 1000 : TIMEOUT;
     try {
-      await page.waitForURL('**euc2-web.posios.com/management/**', { timeout: TIMEOUT });
+      await page.waitForURL('**euc2-web.posios.com/management/**', { timeout: wachtMs });
     } catch (navErr) {
-      // Diagnose: waarom bleven we op de loginpagina? (fout ww / MFA / bot-check)
       let diag = '';
       try {
         diag = await page.evaluate(() => {
-          const txt = (document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400);
-          const captcha = !!document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], [class*="captcha"]');
-          return JSON.stringify({ captcha, txt });
+          const turnstile = !!document.querySelector('input[name="cf-turnstile-response"], [class*="turnstile"], iframe[src*="challenges.cloudflare"]');
+          const txt = (document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+          return JSON.stringify({ turnstile, txt });
         });
       } catch {}
-      console.error('[ls-login] Niet teruggekeerd naar backoffice. Pagina-diagnose:', diag.slice(0, 420));
+      console.error('[ls-login] Niet teruggekeerd naar backoffice. Diagnose:', diag.slice(0, 320));
       throw navErr;
     }
     console.log('[ls-login] Terug in de backoffice — token ophalen...');
@@ -131,6 +137,16 @@ async function main() {
   // Lokaal ook settings.json bijwerken (handig buiten CI).
   if (Object.keys(_sf).length) {
     try { _sf.lsPosToken = token; fs.writeFileSync(path.join(__dirname, 'settings.json'), JSON.stringify(_sf, null, 2)); } catch {}
+  }
+
+  // GitHub Actions secret bijwerken zodat de dagelijkse workflow de verse token
+  // gebruikt (best-effort; vereist gh CLI ingelogd). Vooral nuttig bij headed refresh.
+  try {
+    const { execSync } = require('child_process');
+    execSync('gh secret set LS_POS_TOKEN', { input: token, cwd: __dirname, stdio: ['pipe', 'ignore', 'ignore'] });
+    console.log('[ls-login] GitHub secret LS_POS_TOKEN bijgewerkt.');
+  } catch {
+    console.log('[ls-login] (gh secret niet bijgewerkt — zet LS_POS_TOKEN evt. handmatig.)');
   }
 }
 
