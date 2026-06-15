@@ -199,6 +199,16 @@ async function run() {
       const d = await notion.detecteerDubbels(supabase, learnedBlacklist);
       if (d?.count) console.log(`[inkoop-bot] ${d.count} mogelijk-dubbel melding(en) aangemaakt`);
     } catch (e) { console.warn('[dubbel] fout:', e.message); }
+    // Receptencomposer (Fase 4): bereidingsprijzen herberekenen — de ingrediëntprijzen
+    // kunnen net gewijzigd zijn. Triggert de webapp-compute als APP_URL gezet is.
+    const appUrl = process.env.APP_URL;
+    if (appUrl) {
+      try {
+        const r = await fetch(appUrl.replace(/\/$/, '') + '/api/bereidingen/compute', { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok) console.log(`[inkoop-bot] bereidingsprijzen herberekend (${j.aantal})`);
+      } catch (e) { console.warn('[bereiding-compute] fout:', e.message); }
+    }
   }
 
   if (results.length === 0) {
