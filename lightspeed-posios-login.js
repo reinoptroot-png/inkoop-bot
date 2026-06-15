@@ -56,7 +56,21 @@ async function main() {
     }
 
     // Terug naar de backoffice; daarna verschijnt de sessie-apitoken in sessionStorage.
-    await page.waitForURL('**euc2-web.posios.com/management/**', { timeout: TIMEOUT });
+    try {
+      await page.waitForURL('**euc2-web.posios.com/management/**', { timeout: TIMEOUT });
+    } catch (navErr) {
+      // Diagnose: waarom bleven we op de loginpagina? (fout ww / MFA / bot-check)
+      let diag = '';
+      try {
+        diag = await page.evaluate(() => {
+          const txt = (document.body.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+          const captcha = !!document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], [class*="captcha"]');
+          return JSON.stringify({ captcha, txt });
+        });
+      } catch {}
+      console.error('[ls-login] Niet teruggekeerd naar backoffice. Pagina-diagnose:', diag.slice(0, 420));
+      throw navErr;
+    }
     console.log('[ls-login] Terug in de backoffice — token ophalen...');
 
     for (let i = 0; i < 30 && !token; i++) {
