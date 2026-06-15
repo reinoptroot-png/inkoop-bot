@@ -34,6 +34,16 @@ async function main() {
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  // Diagnose: leg de status van de login-POST(s) vast (200 redirect / 401 fout / 403 block).
+  page.on('response', res => {
+    try {
+      const u = res.url();
+      if (/id\.lightspeed\.app\/login|sso\/oidc|ls-discovery/i.test(u)) {
+        console.log(`[ls-login][net] ${res.status()} ${res.request().method()} ${u.split('?')[0]}`);
+      }
+    } catch {}
+  });
+
   let token = null;
   try {
     // Backoffice openen → redirect naar Lightspeed ID login (geen sessie in verse context).
