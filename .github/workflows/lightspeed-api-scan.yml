@@ -1,0 +1,69 @@
+name: Lightspeed API dagrapport scan
+
+# Vervangt lightspeed-scan.yml (IMAP-pad, uitgeschakeld: one.com blokkeert GitHub IPs).
+# Haalt verkoopdata direct op via de Lightspeed Restaurant K-Series REST API.
+# Geen IMAP of e-mail nodig — werkt vanuit GitHub Actions zonder IP-blokkade.
+#
+# Vereiste GitHub secrets (Settings → Secrets → Actions):
+#   SUPABASE_URL             — https://viqxafualoybzuycsked.supabase.co
+#   SUPABASE_KEY             — Supabase anon key
+#   LS_CLIENT_ID             — Lightspeed Developer Portal (api-portal.lsk.lightspeed.app)
+#   LS_CLIENT_SECRET         — Lightspeed Developer Portal
+#   LS_BUSINESS_LOCATION_ID  — integer ID Europizza vestiging (Lightspeed backoffice)
+#
+# refresh_token wordt beheerd in Supabase instellingen (restaurant=europizza, key=ls_refresh_token).
+# Éénmalige setup: node lightspeed-api-setup.js (op de Mac, daarna automatisch via deze workflow).
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # 08:00 CEST (UTC+2) — na middernacht-afsluiting Lightspeed
+  workflow_dispatch:
+    inputs:
+      datum:
+        description: 'Datum (YYYY-MM-DD, leeg = gisteren)'
+        required: false
+        default: ''
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Maak settings.json
+        env:
+          SUPABASE_URL:             ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:             ${{ secrets.SUPABASE_KEY }}
+          LS_CLIENT_ID:             ${{ secrets.LS_CLIENT_ID }}
+          LS_CLIENT_SECRET:         ${{ secrets.LS_CLIENT_SECRET }}
+          LS_BUSINESS_LOCATION_ID:  ${{ secrets.LS_BUSINESS_LOCATION_ID }}
+        run: |
+          node -e "
+            const s = {
+              supabaseUrl:          process.env.SUPABASE_URL || '',
+              supabaseKey:          process.env.SUPABASE_KEY || '',
+              lsClientId:           process.env.LS_CLIENT_ID || '',
+              lsClientSecret:       process.env.LS_CLIENT_SECRET || '',
+              lsBusinessLocationId: Number(process.env.LS_BUSINESS_LOCATION_ID) || 0,
+              lsRefreshToken:       '',
+              lsAccessToken:        '',
+            };
+            require('fs').writeFileSync('settings.json', JSON.stringify(s));
+          "
+
+      - name: Dagrapport scannen
+        run: |
+          DATUM="${{ github.event.inputs.datum }}"
+          if [ -n "$DATUM" ]; then
+            node lightspeed-api-scan.js "$DATUM"
+          else
+            node lightspeed-api-scan.js
+          fi

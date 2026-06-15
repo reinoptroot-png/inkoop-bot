@@ -541,30 +541,72 @@ Elke gang als kaartje:
 
 ---
 
-## Fase 4 — Dagrapport import (Lightspeed)
+## Fase 4 — Dagrapport import Lightspeed (REST API) ✅
 
-### Doel
-Lightspeed stuurt dagelijks een CSV-rapport naar rein@europa.rest. De inkoop bot scant dit emailadres en importeert de verkoopdata zodat foodcost% per gerecht actueel blijft.
+### Aanpak: REST API (vervangt e-mail/IMAP)
+Het IMAP-pad (`lightspeed-scan.yml`) is uitgeschakeld omdat one.com GitHub Actions datacenter-IPs blokkeert. In plaats daarvan haalt de bot de verkoopdata direct op via de **Lightspeed Restaurant K-Series REST API**.
 
-### Mailbox
-- IMAP_USER3 = rein@europa.rest
-- IMAP_PASS3 = (env var, zelfde imap.one.com server)
-- Toevoegen aan headless.js als derde scanpromise (naast IMAP_USER / IMAP_USER2)
+**API docs:** https://api-docs.lsk.lightspeed.app/
 
-### CSV formaat (Lightspeed export)
-- Bijlage in email van Lightspeed POS
-- Kolommen: datum, gerechtnaam, aantal, omzet excl. BTW
-- Parser: nieuwe module src/lightspeed-parser.js
+### Endpoint (dagelijkse verkoopdata)
+```
+GET https://api.lsk.lightspeed.app/f/v2/business-location/{businessLocationId}/sales-daily
+    ?date=YYYY-MM-DD&include=revenue_center
+Authorization: Bearer {access_token}
+```
+- `businessLocationId` — integer ID van de Europizza vestiging (Lightspeed backoffice)
+- `include=revenue_center` — voegt revenue center naam toe per sale (Keuken vs Bar splitsing)
+- Response: array van `sales[]` met `salesLines[]`, `nbCovers`, `tableNumber`, `type` (SALE/VOID/REFUND)
 
-### Wat de bot doet met de data
-1. CSV inlezen uit email attachment
-2. Per gerecht: omzet + aantal verkopen opslaan
-3. Koppelen aan Notion gerechten op naam (fuzzy match, zelfde logica als ingrediënten)
-4. Berekening actuele foodcost% updaten in Notion of Supabase
+### Response-mapping naar Supabase `dagrapport`
+| API-veld | Supabase-kolom |
+|---|---|
+| sum(salesLines.totalNetAmountWithTax, type=SALE) | totale_omzet |
+| som van lines in sales met revenue_center.name ~"keuken" | keuken_omzet |
+| rest | bar_omzet |
+| sum(sale.nbCovers, dineIn=true) | aantal_gasten |
+| count distinct sale.tableNumber (SALE, dineIn) | aantal_tafels |
+| per product naam: aantal + totaal (food only) | gerechten (JSONB) |
 
-### Nog te bouwen
-- src/lightspeed-parser.js — CSV parser + Notion/Supabase schrijflogica
-- Koppeltabel gerechtnaam Lightspeed ↔ Notion page ID
+Food/bar-classificatie: `revenue_center.name` primair (bevat "keuken"/"kitchen"/"food"), anders DRANK_BLACKLIST op productnaam.
+
+### Bestanden
+- `src/lightspeed-api.js` — fetcher + token-refresh + parser
+- `lightspeed-api-scan.js` — standalone scan script (node lightspeed-api-scan.js [datum])
+- `lightspeed-api-setup.js` — éénmalige OAuth2 setup (haalt eerste refresh_token op)
+- `.github/workflows/lightspeed-api-scan.yml` — dagelijkse GitHub Actions workflow (08:00 CEST)
+
+### Auth: OAuth2 met refresh_token
+```
+POST https://auth.lsk.lightspeed.app/realms/k-series/protocol/openid-connect/token
+grant_type=refresh_token&client_id=...&client_secret=...&refresh_token=...
+```
+- `access_token` verloopt na ~5 min; de scan script refresht automatisch
+- `refresh_token` wordt na elke gebruik opgeslagen in Supabase `instellingen` (restaurant='europizza', key='ls_refresh_token') zodat rotatie geen probleem is
+
+### Configuratie (éénmalig)
+1. Registreer een API-client op https://api-portal.lsk.lightspeed.app/
+2. Noteer `client_id`, `client_secret` en `businessLocationId` (Lightspeed backoffice)
+3. Voeg toe aan `settings.json` als `lsClientId`, `lsClientSecret`, `lsBusinessLocationId`
+4. Run: `node lightspeed-api-setup.js` — opent browser voor OAuth2-autorisatie, slaat refresh_token op in Supabase
+5. Voeg GitHub secrets toe aan `reinoptroot-png/inkoop-bot`:
+   - `LS_CLIENT_ID`, `LS_CLIENT_SECRET`, `LS_BUSINESS_LOCATION_ID`
+
+### GitHub Actions workflow
+- Schedule: dagelijks 08:00 CEST (`cron: '0 6 * * *'`)
+- Geen IMAP of Playwright nodig — puur HTTP naar api.lsk.lightspeed.app
+- `workflow_dispatch` met optioneel `datum`-input voor handmatige runs op specifieke datum
+- refresh_token wordt uit Supabase geladen, na gebruik terug opgeslagen (automatische rotatie)
+
+### Supabase tabel
+Bestaande `dagrapport` tabel (upsert op `datum,restaurant='europizza'`). Geen schema-wijziging nodig.
+
+### Status
+- ✅ src/lightspeed-api.js — fetcher + parser gebouwd
+- ✅ lightspeed-api-scan.js — scan script gebouwd  
+- ✅ lightspeed-api-setup.js — setup script gebouwd
+- ✅ .github/workflows/lightspeed-api-scan.yml — workflow gebouwd
+- ⏳ Nog te doen: eenmalige setup uitvoeren (credentials ophalen bij Lightspeed) + GitHub secrets instellen
 
 ---
 
