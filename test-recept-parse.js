@@ -40,6 +40,24 @@ let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
   ok('lege/Untitled/header-rijen overgeslagen; opbrengst met eenheid geparsed');
 }
 
+// Methode-stappen / sectie-labels worden niet als ingrediënt opgepikt
+{
+  const r = parseRecept({
+    metaRows: [['Naam recept', 'Kiwi salie saus'], ['Opbrengst', '']],
+    ingredientRows: [
+      ['Ingrediënten', 'Hoeveelheid', 'Eenheid', 'Opbrengst (ivt)'],
+      ['Stap 1:', '', '', ''],
+      ['Kiwi geschild', '500', 'gr', ''],
+      ['Stap 2 PER DAG !!!', '', '', ''],
+      ['Garnituur:', '', '', ''],
+      ['Fijn zout', '10', 'gr', ''],
+    ],
+  });
+  assert(r.regels.length === 2, 'alleen echte ingrediënten: ' + JSON.stringify(r.regels.map(x => x.naam)));
+  assert(r.regels[0].naam === 'Kiwi geschild' && r.regels[1].naam === 'Fijn zout');
+  ok('methode-stappen ("Stap 1:", "Stap 2 PER DAG !!!") en sectie-labels overgeslagen');
+}
+
 // getal-helper: komma, spaties, eenheidstekst
 {
   assert(getal('1,5') === 1.5 && getal('30') === 30 && getal('1 ') === 1 && getal('') === null && getal('abc') === null);
