@@ -17,7 +17,8 @@ let s = {}; try { s = require('./settings.json'); } catch (e) {}
 require('dotenv').config();
 const { Client } = require('@notionhq/client');
 const { parseRecept } = require('./src/recept-parse');
-const { schatYield, basisNaarOutputEenheid, normEenheid, matchLokaal } = require('./src/recept-import-lib');
+const { schatYield, basisNaarOutputEenheid, normEenheid, matchLokaal, normNaam } = require('./src/recept-import-lib');
+const { matchRegelViaHaiku } = require('./src/bereiding-match');
 
 const notion = new Client({ auth: s.notionToken || process.env.NOTION_TOKEN });
 
@@ -33,6 +34,11 @@ const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] :
 const txt = (cells) => (cells || []).map(t => t.plain_text).join('');
 const COMMIT = flag('--commit');
 const limit = parseInt(opt('--limit', '0'), 10) || 0;
+
+// Haiku-fallback: als matchLokaal niets vindt, laat Haiku de regel disambigueren.
+// Aan tenzij --no-haiku of geen key. Draait in dry-run én commit (eerlijke preview).
+const anthropicKey = s.anthropicKey || process.env.ANTHROPIC_API_KEY;
+const USE_HAIKU = !flag('--no-haiku') && !!anthropicKey;
 
 let supabase = null;
 if (process.env.SUPABASE_URL && (process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY)) {
@@ -92,6 +98,25 @@ async function laadIngredientIndex() {
   }));
 }
 
+// Zelflerend: schrijf de (afwijkende) receptnaam terug als alias op het inkoop-ingredient,
+// zodat matchLokaal 'm volgende keer deterministisch vangt (geen Haiku/review meer nodig).
+// Werkt ook de in-memory index bij zodat latere regels in dezelfde run mee profiteren.
+async function leerAlias(ingredientId, receptNaam, index) {
+  const doel = normNaam(receptNaam);
+  if (!doel) return false;
+  const inMem = (index || []).find(c => c.id === ingredientId);
+  if (inMem && (inMem.namen || []).some(n => normNaam(n) === doel)) return false; // al bekend
+  if (COMMIT && supabase) {
+    const { data: row } = await supabase.from('inkoop_prijzen').select('aliassen').eq('id', ingredientId).single();
+    const bestaand = String(row?.aliassen || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (bestaand.some(a => normNaam(a) === doel)) return false;
+    bestaand.push(receptNaam.trim());
+    await supabase.from('inkoop_prijzen').update({ aliassen: bestaand.join(', ') }).eq('id', ingredientId);
+  }
+  if (inMem) inMem.namen.push(receptNaam.trim());
+  return true;
+}
+
 (async () => {
   if (COMMIT && !supabase) { console.error('FOUT: --commit vereist SUPABASE_URL + SUPABASE_ANON_KEY in .env'); process.exit(1); }
   console.log(COMMIT ? '=== COMMIT — schrijft naar Supabase ===\n' : '=== DRY-RUN — geen writes ===\n');
@@ -128,7 +153,8 @@ async function laadIngredientIndex() {
     namen: [r.naam], locatie: r.locatie,
   }));
 
-  let nMatch = 0, nReview = 0, nComp = 0, nGeschat = 0, nIncompleet = 0;
+  let nMatch = 0, nReview = 0, nComp = 0, nGeschat = 0, nIncompleet = 0, nHaiku = 0, nGeleerd = 0;
+  if (USE_HAIKU) console.log('  (Haiku-fallback actief voor niet-lokaal herkende regels)\n');
 
   for (const r of recepten) {
     if (r.yield_geschat) nGeschat++;
@@ -149,10 +175,22 @@ async function laadIngredientIndex() {
       }
       // sub-bereidingen van dezelfde locatie krijgen voorrang
       const index = { ingredients: ingredientIndex, bereidingen: bereidingIndex.filter(b => b.locatie === r.locatie && b.namen[0].toLowerCase() !== (r.naam || '').toLowerCase()) };
-      const m = matchLokaal(reg.naam, index);
+      let m = matchLokaal(reg.naam, index);
+      let via = m ? `${(m.score * 100).toFixed(0)}%` : null;
+      // Fallback: laat Haiku de regel disambigueren als de lokale matcher niets vond.
+      if (!m && USE_HAIKU) {
+        const hk = await matchRegelViaHaiku(reg.naam, {
+          ingredients: index.ingredients.map(c => ({ id: c.id, canonical: c.namen[0] })).filter(c => c.canonical),
+          bereidingen: index.bereidingen.map(b => ({ id: b.id, canonical: b.namen[0] })).filter(b => b.canonical),
+        }, anthropicKey);
+        if (hk && hk.id) { m = { id: hk.id, type: hk.type, score: hk.confidence / 100 }; via = `haiku ${hk.confidence}%`; nHaiku++; }
+      }
       if (m && m.id) {
         nMatch++;
-        regelInfo.push(`${reg.naam} → ${m.type} (${(m.score * 100).toFixed(0)}%)`);
+        // Zelflerend: koppel deze receptnaam als alias als 'm nog niet exact bekend was
+        // (Haiku-match of fuzzy lokaal). Volgende keer vangt matchLokaal 'm direct.
+        if (m.type === 'ingredient' && m.score < 1 && await leerAlias(m.id, reg.naam, ingredientIndex)) nGeleerd++;
+        regelInfo.push(`${reg.naam} → ${m.type} (${via})`);
         if (COMMIT && bid) {
           const row = { bereiding_id: bid, hoeveelheid: reg.hoeveelheid, eenheid: reg.eenheid || 'g' };
           if (m.type === 'bereiding') row.sub_bereiding_id = m.id; else row.ingredient_id = m.id;
@@ -176,7 +214,8 @@ async function laadIngredientIndex() {
   console.log(`  recepten:            ${recepten.length}`);
   console.log(`  yield geschat:       ${nGeschat}  (Opbrengst ontbrak → som van inputs)`);
   console.log(`  nog incompleet:      ${nIncompleet}  (geen yield én niet schatbaar)`);
-  console.log(`  regels gekoppeld:    ${nMatch}`);
+  console.log(`  regels gekoppeld:    ${nMatch}  (waarvan ${nHaiku} via Haiku-fallback)`);
+  console.log(`  aliassen geleerd:    ${nGeleerd}  (receptnaam → inkoop-ingredient, ${COMMIT ? 'weggeschreven' : 'zou leren'})`);
   console.log(`  regels naar review:  ${nReview}`);
   console.log(`  componenten ${COMMIT ? 'geschreven' : '(zou schrijven)'}: ${nComp}`);
   if (!COMMIT) console.log('\nDraai met --commit om dit echt weg te schrijven (idempotent op notion_page_id).');
