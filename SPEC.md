@@ -1,4 +1,4 @@
-# Inkoop bot — onderdeel van het Europizza/Europa-systeem
+# Inkoop bot — onderdeel van The Euro Food Monitor
 
 > **De volledige specificatie is samengevoegd tot één bron van waarheid (15 juni 2026).**
 > Deze bot is geen losstaand project meer maar één van drie samenwerkende onderdelen
