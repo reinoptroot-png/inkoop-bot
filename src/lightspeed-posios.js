@@ -26,6 +26,8 @@ const https = require('https');
 
 const REPORT_HOST = 'reporting-prod-euc2-eks.posios.com';
 const REPORT_PATH = '/reporting/data/intervalreport';
+const BIGREP_HOST = 'bigreporting-prod-euc2.posios.com';
+const BIGREP_PATH = '/PosServer/JSON-RPC';
 const TIMEZONE    = 'Europe/Amsterdam';
 
 // Categorieën die als drank (bar) tellen wanneer we per categorie classificeren.
@@ -54,6 +56,16 @@ function businessDayRange(dateStr) {
     from: new Date(fromMs).toISOString(),
     to: new Date(fromMs + 24 * 3600 * 1000).toISOString(),
   };
+}
+
+// Middernacht-lokale dag (00:00 → 24:00 Europe/Amsterdam) in epoch-ms. Dit venster
+// gebruikt het product-rapport (getProductAnalytics); de productsom incl btw is
+// geverifieerd gelijk aan de dag-omzet (€5954,85 op 2026-06-12). DST-veilig.
+function midnightDayRangeMs(dateStr) {
+  const guess = new Date(`${dateStr}T00:00:00Z`);
+  const off = amsterdamOffsetMin(guess);
+  const fromMs = Date.parse(`${dateStr}T00:00:00Z`) - off * 60000;
+  return { fromMs, toMs: fromMs + 24 * 3600 * 1000 - 1000 };
 }
 
 function postReport(token, requestedItems, from, to) {
@@ -86,6 +98,61 @@ function postReport(token, requestedItems, from, to) {
     req.write(body);
     req.end();
   });
+}
+
+// PosServer JSON-RPC (legacy "bigreporting") — gebruikt door het product-rapport.
+// Token gaat als eerste param mee (geen header).
+function postBigReporting(method, params) {
+  const body = JSON.stringify({ id: 0, method, params });
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: BIGREP_HOST, path: BIGREP_PATH, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    }, res => {
+      let d = '';
+      res.on('data', c => { d += c; });
+      res.on('end', () => {
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          return reject(Object.assign(new Error(`Lightspeed auth mislukt (${res.statusCode})`), { authExpired: true }));
+        }
+        if (res.statusCode !== 200) return reject(new Error(`bigreporting HTTP ${res.statusCode}: ${d.slice(0, 200)}`));
+        try { resolve(JSON.parse(d)); }
+        catch (e) { reject(new Error(`bigreporting JSON parse fout: ${e.message}`)); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+const isDrankNaam = (n) => /\b(bier|beer|wijn|wine|cocktail|gin|wodka|rum|whisky|cognac|likeur|porto|sherry|cava|prosecco|champagne|cola|fanta|sprite|frisdrank|sap|tonic|spa|water|koffie|coffee|thee|tea|espresso|cappuccino|latte|club.?mate|negroni|spritz|aperol|campari)\b/i.test(n || '');
+
+// Per product (gerecht): orderAmount + omzet, via getProductAnalytics over de
+// middernacht-dag. totaal = excl btw (totalPrice is incl). Food/bar-classificatie:
+// btw 9% of niet-drank-naam = keuken, anders bar.
+async function fetchProductGerechten(token, dateStr) {
+  const { fromMs, toMs } = midnightDayRangeMs(dateStr);
+  const resp = await postBigReporting('manager.getProductAnalytics', [token, fromMs, toMs]);
+  const rows = resp?.result || [];
+  return rows
+    .filter(p => (p.orderAmount || 0) !== 0 && !/discount/i.test(p.name || ''))
+    .map(p => {
+      const vat = p.vat || 0;
+      const totaalExcl = Math.round(((p.totalPrice || 0) / (1 + vat / 100)) * 100) / 100;
+      const drank = vat >= 21 || isDrankNaam(p.name);
+      return {
+        naam: (p.name || '').trim(),
+        aantal: p.orderAmount,
+        prijs: p.price ?? null,
+        totaal: totaalExcl,
+        vat,
+        categorie: p.pId || null,
+        type: drank ? 'Bar' : 'Keuken',
+        food: !drank,
+      };
+    })
+    .sort((a, b) => b.totaal - a.totaal);
 }
 
 function parsePosiosDay(revenueResp, receiptResp, datum) {
@@ -129,7 +196,18 @@ async function fetchPosiosDagrapport(dateStr, token) {
     postReport(token, ['revenue'], from, to),
     postReport(token, ['receiptAggregates'], from, to),
   ]);
-  return parsePosiosDay(revenueResp, receiptResp, dateStr);
+  const dr = parsePosiosDay(revenueResp, receiptResp, dateStr);
+
+  // Per-product gerechten via het legacy product-rapport. Mislukt dit (of leeg),
+  // dan blijft de categorie-niveau lijst uit parsePosiosDay staan als fallback.
+  try {
+    const producten = await fetchProductGerechten(token, dateStr);
+    if (producten.length) dr.gerechten = producten;
+  } catch (e) {
+    if (e.authExpired) throw e;
+    // stil: categorie-niveau fallback blijft staan
+  }
+  return dr;
 }
 
 module.exports = { fetchPosiosDagrapport, parsePosiosDay, businessDayRange };
