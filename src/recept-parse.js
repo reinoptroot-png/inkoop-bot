@@ -35,11 +35,13 @@ function parseRecept({ naam = null, metaRows = [], ingredientRows = [] }) {
   const regels = [];
   for (const r of ingredientRows) {
     const n = (r[0] || '').trim();
-    if (!n) continue;
-    if (n.toLowerCase().startsWith('ingredi')) continue;   // header-rij
-    if (n.toLowerCase() === 'untitled') continue;          // lege sjabloon-rij
-    if (/^stap\b/i.test(n) || /^methode\b/i.test(n)) continue;  // methode-stap, geen ingrediënt
     const heeftHoev = (r[1] || '').trim() !== '';
+    if (!n && !heeftHoev) continue;
+    if (n.toLowerCase().startsWith('ingredi')) continue;   // header-rij
+    // "untitled"/lege naam ALLEEN skippen als er ook geen hoeveelheid is (echt lege sjabloon-rij).
+    // Mét hoeveelheid is het een dropped page-mention (genest sub-recept) → laten staan voor review.
+    if ((!n || n.toLowerCase() === 'untitled') && !heeftHoev) continue;
+    if (/^stap\b/i.test(n) || /^methode\b/i.test(n)) continue;  // methode-stap, geen ingrediënt
     if (n.endsWith(':') && !heeftHoev) continue;           // sectie-label ("Stap 2:", "Garnituur:")
     regels.push({
       naam: n,

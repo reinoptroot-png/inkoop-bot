@@ -22,22 +22,24 @@ let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
   ok('Koji water: 3 regels geparsed, geen yield => incompleet');
 }
 
-// Lege sjabloon-rijen + "Untitled" worden overgeslagen; header genegeerd
+// Echt lege rijen + header overgeslagen; "Untitled" MÉT hoeveelheid blijft staan
+// (= dropped page-mention / genest sub-recept dat anders verloren ging).
 {
   const r = parseRecept({
     metaRows: [['Naam recept', 'Sauce au poivre'], ['Opbrengst', '2 L']],
     ingredientRows: [
       ['Ingrediënten', 'Hoeveelheid', 'Eenheid', 'Opbrengst (ivt)'],
-      ['Untitled', '2000', 'ml', ''],
-      ['', '', '', ''],
+      ['Untitled', '2000', 'ml', ''],   // dropped mention → behouden (gaat naar review)
+      ['Untitled', '', '', ''],         // echt lege sjabloon-rij → overslaan
+      ['', '', '', ''],                 // lege rij → overslaan
       ['Room', '500', 'ml', ''],
     ],
   });
   assert(r.naam === 'Sauce au poivre');
-  assert(r.regels.length === 1 && r.regels[0].naam === 'Room', 'alleen echte regels');
+  assert(r.regels.length === 2 && r.regels.map(x => x.naam).join(',') === 'Untitled,Room', 'untitled-met-hoev behouden: ' + JSON.stringify(r.regels.map(x => x.naam)));
   assert(r.opbrengst === 2 && r.opbrengst_eenheid === 'L');
   assert(r.compleet === true, 'yield + regel => compleet');
-  ok('lege/Untitled/header-rijen overgeslagen; opbrengst met eenheid geparsed');
+  ok('lege/header overgeslagen; Untitled-met-hoeveelheid behouden; opbrengst geparsed');
 }
 
 // Methode-stappen / sectie-labels worden niet als ingrediënt opgepikt

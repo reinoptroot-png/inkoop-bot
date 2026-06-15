@@ -31,6 +31,22 @@ const DB_LOCATIE = [
 const args = process.argv.slice(2);
 const flag = (n) => args.includes(n);
 const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
+// Page-mentions (📄-links naar een ander recept = nesting) komen via de API vaak binnen als
+// lege/"Untitled" plain_text. Resolve dan de echte paginatitel, anders valt de geneste regel weg.
+async function cellTekst(cell) {
+  let out = '';
+  for (const t of (cell || [])) {
+    const leeg = !t.plain_text || t.plain_text.trim().toLowerCase() === 'untitled';
+    if (t.type === 'mention' && t.mention?.type === 'page' && leeg) {
+      try {
+        const p = await notion.pages.retrieve({ page_id: t.mention.page.id });
+        const tp = Object.values(p.properties).find(x => x.type === 'title');
+        out += tp ? tp.title.map(z => z.plain_text).join('') : (t.plain_text || '');
+      } catch { out += t.plain_text || ''; }
+    } else out += t.plain_text || '';
+  }
+  return out;
+}
 const txt = (cells) => (cells || []).map(t => t.plain_text).join('');
 const COMMIT = flag('--commit');
 const limit = parseInt(opt('--limit', '0'), 10) || 0;
@@ -51,7 +67,8 @@ async function leesTabellen(pageId) {
   let metaRows = [], ingredientRows = [];
   for (const t of ch.results.filter(b => b.type === 'table')) {
     const rr = await notion.blocks.children.list({ block_id: t.id, page_size: 100 });
-    const rows = rr.results.map(r => r.table_row.cells.map(c => txt(c)));
+    // cellTekst resolvet page-mentions naar hun titel (zie boven); vandaar async.
+    const rows = await Promise.all(rr.results.map(r => Promise.all(r.table_row.cells.map(c => cellTekst(c)))));
     if (t.table.table_width === 2) metaRows = rows; else ingredientRows = rows;
   }
   return { metaRows, ingredientRows };
