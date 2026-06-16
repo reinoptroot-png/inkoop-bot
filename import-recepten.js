@@ -17,7 +17,7 @@ let s = {}; try { s = require('./settings.json'); } catch (e) {}
 require('dotenv').config();
 const { Client } = require('@notionhq/client');
 const { parseRecept } = require('./src/recept-parse');
-const { schatYield, basisNaarOutputEenheid, normEenheid, matchLokaal, normNaam } = require('./src/recept-import-lib');
+const { schatYield, basisNaarOutputEenheid, yieldVerlies, normEenheid, matchLokaal, normNaam } = require('./src/recept-import-lib');
 const { matchRegelViaHaiku } = require('./src/bereiding-match');
 
 const notion = new Client({ auth: s.notionToken || process.env.NOTION_TOKEN, timeoutMs: 120000 });
@@ -95,7 +95,17 @@ function bepaalYield(parsed) {
     return { eind_yield: parsed.opbrengst, output_eenheid: n ? basisNaarOutputEenheid(n.basis) : 'gram', yield_geschat: false, yield_bron: 'opbrengst' };
   }
   const sch = schatYield(parsed.regels);
-  if (sch) return { eind_yield: sch.yield, output_eenheid: basisNaarOutputEenheid(sch.basis), yield_geschat: true, yield_bron: 'som van inputs' };
+  if (sch) {
+    // Massa/volume verdampt bij inkoken/garen → echte yield < som inputs. Pas een ruwe
+    // verliesfactor toe op basis van de methode in de naam (niet bij 'stuks' — aantallen
+    // gaan niet verloren door koken). Blijft GEFLAGD als schatting.
+    const v = (sch.basis === 'g' || sch.basis === 'ml') ? yieldVerlies(parsed.naam) : null;
+    const yld = v ? Math.round(sch.yield * v.factor) : sch.yield;
+    return {
+      eind_yield: yld, output_eenheid: basisNaarOutputEenheid(sch.basis), yield_geschat: true,
+      yield_bron: v ? `som van inputs × ${v.factor} (${v.methode})` : 'som van inputs',
+    };
+  }
   return { eind_yield: null, output_eenheid: 'gram', yield_geschat: false, yield_bron: null };
 }
 

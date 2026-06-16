@@ -38,6 +38,28 @@ function basisNaarOutputEenheid(basis) {
   return basis === 'g' ? 'gram' : (basis === 'ml' ? 'ml' : 'stuks');
 }
 
+// Schat het massa-/volumeverlies van een bereiding uit de receptnaam (Passard, conservatief).
+// "Som van inputs" klopt alleen voor koud aanmengen (mayo, dressing); bij inkoken/reduceren en
+// bij garen/braden verdampt vocht → de echte yield is lager → kostprijs per gram hoger. We leiden
+// een ruwe verliesfactor af uit de methode in de naam (de enige betrouwbare bron — stappen worden
+// door de parser gedropt). Twee buckets zoals afgesproken; reductie wint van gaar.
+const VERLIES_REDUCTIE = 0.5;  // inkoken/reduceren/glace/siroop: ~halveert (sterk variabel → middenwaarde)
+const VERLIES_GAAR = 0.8;      // garen/braden/bakken/grillen: ~20% vochtverlies
+const REDUCTIE_WOORDEN = ['reductie', 'gereduceerd', 'reduceren', 'ingekookt', 'inkoken', 'gastrique',
+  'glace', 'siroop', 'stroop', 'karamel', 'demi'];
+const GAAR_WOORDEN = ['gegaard', 'garen', 'gekookt', 'koken', 'gebraden', 'braden', 'gebakken', 'bakken',
+  'gegrild', 'grillen', 'geroosterd', 'roosteren', 'gepocheerd', 'pocheren', 'gestoofd', 'stoven', 'stoof',
+  'gestoomd', 'stomen', 'confit', 'gekonfijt'];
+
+// Retour: { factor, methode } of null als de naam geen gaar-/reductiemethode noemt.
+function yieldVerlies(naam) {
+  const toks = [...tokens(naam)];
+  const heeft = (lijst) => lijst.some(w => toks.some(t => t.startsWith(w)));  // prefix: vangt -e/-en verbuigingen
+  if (heeft(REDUCTIE_WOORDEN)) return { factor: VERLIES_REDUCTIE, methode: 'inkoken' };
+  if (heeft(GAAR_WOORDEN)) return { factor: VERLIES_GAAR, methode: 'garen' };
+  return null;
+}
+
 function normNaam(s) {
   return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -77,4 +99,4 @@ function matchLokaal(naam, index, drempel = 0.6) {
   return best && best.score >= drempel ? best : null;
 }
 
-module.exports = { normEenheid, schatYield, basisNaarOutputEenheid, matchLokaal, normNaam, jaccard };
+module.exports = { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, matchLokaal, normNaam, jaccard };

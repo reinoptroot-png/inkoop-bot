@@ -1,6 +1,6 @@
 // node test-recept-import-lib.js
 const assert = require('assert');
-const { normEenheid, schatYield, basisNaarOutputEenheid, matchLokaal } = require('./src/recept-import-lib');
+const { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, matchLokaal } = require('./src/recept-import-lib');
 let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
 
 // normEenheid
@@ -27,6 +27,16 @@ let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
 {
   assert(schatYield([{ hoeveelheid: 1, eenheid: 'snufje' }, { hoeveelheid: null, eenheid: 'gr' }]) === null);
   ok('schatYield => null als niets normaliseerbaar is');
+}
+
+// yieldVerlies — methode uit naam → verliesfactor (reductie wint van gaar)
+{
+  assert(yieldVerlies('Tomaten reductie').factor === 0.5, 'reductie => 0.5');
+  assert(yieldVerlies('Gegaarde knolselderij').factor === 0.8, 'garen => 0.8');
+  assert(yieldVerlies('Kalfsfond ingekookt').methode === 'inkoken');
+  assert(yieldVerlies('Demi glace gereduceerd').factor === 0.5, 'reductie wint van/naast gaar');
+  assert(yieldVerlies('Mayonaise') === null, 'koud aanmengen => geen verlies');
+  ok('yieldVerlies: reductie 0.5, garen 0.8, koud => null');
 }
 
 // matchLokaal
