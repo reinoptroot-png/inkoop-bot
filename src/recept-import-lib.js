@@ -60,6 +60,24 @@ function yieldVerlies(naam) {
   return null;
 }
 
+// Passard concept-normalisatie: "rauwe knoflook" en "knoflook" zijn hetzelfde product — het
+// woord "rauw" is een bereidingstoestand, geen ander ingrediënt. We strippen neutrale prep-woorden
+// uit de concept-sleutel zodat zulke rijen aan één basisconcept koppelen.
+// PREP_AUTO: veilig om automatisch te negeren (rauw = de basistoestand).
+// PREP_VOORSTEL: bredere neutrale set die je mág VOORSTELLEN om te mergen (mens bevestigt).
+// Transformaties (gerookt/gedroogd/gekonfijt/gepekeld/gerijpt…) staan er bewust NIET in: dat zijn
+// echt andere producten met een andere prijs.
+const PREP_AUTO = ['rauw', 'rauwe'];
+const PREP_VOORSTEL = ['rauw', 'rauwe', 'vers', 'verse', 'gewassen', 'ongewassen', 'schoongemaakt',
+  'gepeld', 'ongepeld', 'geschild', 'gesneden'];
+// Strip prep-woorden uit een al lower+trim naam; behoudt de rest exact (accenten/leestekens),
+// zodat de sleutel matcht met de bestaande ingredient_concept.canonical_naam (lower+trim uit SQL).
+function conceptSleutel(naamLowerTrim, woorden = PREP_AUTO) {
+  const s = String(naamLowerTrim || '').trim();
+  const out = s.split(/\s+/).filter(t => t && !woorden.includes(t)).join(' ').trim();
+  return out || s;
+}
+
 function normNaam(s) {
   return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -99,4 +117,4 @@ function matchLokaal(naam, index, drempel = 0.6) {
   return best && best.score >= drempel ? best : null;
 }
 
-module.exports = { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, matchLokaal, normNaam, jaccard };
+module.exports = { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, conceptSleutel, PREP_AUTO, PREP_VOORSTEL, matchLokaal, normNaam, jaccard };

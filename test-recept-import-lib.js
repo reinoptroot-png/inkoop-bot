@@ -1,6 +1,6 @@
 // node test-recept-import-lib.js
 const assert = require('assert');
-const { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, matchLokaal } = require('./src/recept-import-lib');
+const { normEenheid, schatYield, basisNaarOutputEenheid, yieldVerlies, conceptSleutel, PREP_VOORSTEL, matchLokaal } = require('./src/recept-import-lib');
 let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
 
 // normEenheid
@@ -37,6 +37,17 @@ let n = 0; const ok = (m) => { n++; console.log('  ✓', m); };
   assert(yieldVerlies('Demi glace gereduceerd').factor === 0.5, 'reductie wint van/naast gaar');
   assert(yieldVerlies('Mayonaise') === null, 'koud aanmengen => geen verlies');
   ok('yieldVerlies: reductie 0.5, garen 0.8, koud => null');
+}
+
+// conceptSleutel — strip neutrale prep-woorden zodat "rauwe knoflook" → "knoflook"
+{
+  assert(conceptSleutel('rauwe knoflook') === 'knoflook', 'rauwe knoflook → knoflook');
+  assert(conceptSleutel('knoflook') === 'knoflook', 'plain blijft');
+  assert(conceptSleutel('rauw') === 'rauw', 'alleen-prep blijft (niet leeg maken)');
+  assert(conceptSleutel('crème fraîche') === 'crème fraîche', 'accenten/leestekens behouden');
+  assert(conceptSleutel('gerookte zalm') === 'gerookte zalm', 'transformatie NIET strippen (auto)');
+  assert(conceptSleutel('verse knoflook', PREP_VOORSTEL) === 'knoflook', 'voorstel-set strip vers');
+  ok('conceptSleutel: strip rauw(e); behoudt accenten; raakt transformaties niet');
 }
 
 // matchLokaal

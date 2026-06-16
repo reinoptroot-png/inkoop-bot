@@ -1,5 +1,6 @@
 const { Client } = require('@notionhq/client');
 const fetch = require('node-fetch');
+const { conceptSleutel } = require('./recept-import-lib');
 
 // --- Fuzzy match helpers ---
 function levenshtein(a, b) {
@@ -768,7 +769,8 @@ class NotionSync {
 
       let gekoppeld = 0;
       for (const r of los) {
-        const cn = norm(r.canonical_naam || r.naam);
+        // Strip neutrale prep-woorden (rauw/rauwe) → "rauwe knoflook" koppelt aan concept "knoflook".
+        const cn = conceptSleutel(norm(r.canonical_naam || r.naam));
         if (!cn) continue;
         let cid = idByNaam[cn];
         if (!cid) {
