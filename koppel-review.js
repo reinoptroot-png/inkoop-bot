@@ -17,6 +17,17 @@ const { matchRegelViaHaiku } = require('./src/bereiding-match');
 const COMMIT = process.argv.includes('--commit');
 const anthropicKey = s.anthropicKey || process.env.ANTHROPIC_API_KEY;
 const USE_HAIKU = !process.argv.includes('--no-haiku') && !!anthropicKey;
+// Trechtermond: alleen HOGE-confidence auto-koppelen; twijfel blijft review (mens bevestigt
+// in de composer). Voorkomt foute auto-koppelingen (zoals "lams botten" ↔ "lams zwezerik").
+// --alles herstelt het oude gedrag (koppel alles wat matcht).
+const KOPPEL_ALLES = process.argv.includes('--alles');
+const AUTO_LOKAAL = 0.8;   // token-Jaccard-drempel voor auto (exact/alias = 1 → altijd auto)
+const AUTO_HAIKU = 0.90;   // Haiku-confidence-drempel voor auto
+function isZeker(d) {
+  if (!d || !d.m) return false;
+  if (KOPPEL_ALLES) return true;
+  return d.bron === 'haiku' ? d.m.score >= AUTO_HAIKU : d.m.score >= AUTO_LOKAAL;
+}
 const sb = require('@supabase/supabase-js').createClient(
   process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY);
 
@@ -54,7 +65,7 @@ async function leerAlias(ingredientId, receptNaam, index) {
     .select('id, bereiding_id, regel_naam, hoeveelheid, eenheid').eq('status', 'pending').not('hoeveelheid', 'is', null);
 
   const berLocatie = {}; for (const b of bereidingIndex) berLocatie[b.id] = b.locatie;
-  let nLokaal = 0, nHaiku = 0, nGeleerd = 0, nReview = 0, nCyclus = 0;
+  let nLokaal = 0, nHaiku = 0, nGeleerd = 0, nReview = 0, nCyclus = 0, nTwijfel = 0;
 
   const indexVoor = (rv) => ({
     ingredients: ingredientIndex,
@@ -66,7 +77,7 @@ async function leerAlias(ingredientId, receptNaam, index) {
   const beslissing = new Map(); // rv.id -> { m, via }
   for (const rv of reviews || []) {
     const m = matchLokaal(rv.regel_naam, indexVoor(rv));
-    if (m) { nLokaal++; beslissing.set(rv.id, { m, via: `lokaal ${(m.score * 100).toFixed(0)}%` }); }
+    if (m) { nLokaal++; beslissing.set(rv.id, { m, via: `lokaal ${(m.score * 100).toFixed(0)}%`, bron: 'lokaal' }); }
     else if (USE_HAIKU) teHaiku.push(rv);
     else { beslissing.set(rv.id, null); }
   }
@@ -83,7 +94,7 @@ async function leerAlias(ingredientId, receptNaam, index) {
         ingredients: index.ingredients.map(c => ({ id: c.id, canonical: c.namen[0] })).filter(c => c.canonical),
         bereidingen: index.bereidingen.map(b => ({ id: b.id, canonical: b.namen[0] })).filter(b => b.canonical),
       }, anthropicKey);
-      if (hk && hk.id) { nHaiku++; beslissing.set(rv.id, { m: { id: hk.id, type: hk.type, score: hk.confidence / 100 }, via: `haiku ${hk.confidence}%` }); }
+      if (hk && hk.id) { nHaiku++; beslissing.set(rv.id, { m: { id: hk.id, type: hk.type, score: hk.confidence / 100 }, via: `haiku ${hk.confidence}%`, bron: 'haiku' }); }
       else beslissing.set(rv.id, null);
     }));
     console.log(`  Haiku ${Math.min(i + CONC, teHaiku.length)}/${teHaiku.length} verwerkt…`);
@@ -95,6 +106,8 @@ async function leerAlias(ingredientId, receptNaam, index) {
     const d = beslissing.get(rv.id);
     if (!d) { nReview++; console.log(`  · ${rv.regel_naam} → blijft review`); continue; }
     const { m, via } = d;
+    // Trechtermond: twijfel niet auto-koppelen — laat als review, mens bevestigt in de composer.
+    if (!isZeker(d)) { nTwijfel++; console.log(`  ? ${rv.regel_naam} → twijfel (${via}) — blijft review, bevestig in composer`); continue; }
     if (m.type === 'ingredient' && m.score < 1 && await leerAlias(m.id, rv.regel_naam, ingredientIndex)) nGeleerd++;
     console.log(`  ✓ ${rv.regel_naam} → ${m.type} (${via})`);
     if (COMMIT) {
@@ -112,6 +125,8 @@ async function leerAlias(ingredientId, receptNaam, index) {
   console.log(`  gekoppeld via Haiku:   ${nHaiku}`);
   console.log(`  aliassen geleerd:      ${nGeleerd}`);
   console.log(`  cyclus overgeslagen:   ${nCyclus}`);
+  console.log(`  twijfel (→ bevestig):  ${nTwijfel}`);
   console.log(`  blijft review:         ${nReview}`);
-  if (!COMMIT) console.log('\nDraai met --commit om te schrijven.');
+  console.log(`  drempels: lokaal ≥ ${AUTO_LOKAAL}, haiku ≥ ${AUTO_HAIKU}${KOPPEL_ALLES ? ' (genegeerd: --alles)' : ''}`);
+  if (!COMMIT) console.log('\nDraai met --commit om te schrijven (alleen de zekere koppelingen).');
 })().catch(e => { console.error('FOUT:', e.message); process.exit(1); });
