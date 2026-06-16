@@ -6,7 +6,8 @@
 // hoogste trust). Zo wordt het "brein" gebootstrapt met kok-kennis i.p.v. leeg te starten.
 //
 //   node seed-concept-kennis.js            # DRY-RUN (toont voorstellen, geen writes)
-//   node seed-concept-kennis.js --commit   # schrijft de voorstellen (bron='llm')
+//   node seed-concept-kennis.js --commit   # schrijft de voorstellen (bron='llm') naar Supabase
+//   node seed-concept-kennis.js --sql      # print INSERT-SQL om in de Supabase SQL-editor te plakken
 //
 // Idempotent: bestaande (concept, eenheid) in de kennis-tabel wordt overgeslagen, dus een
 // mens-bevestigde of eerder geseede waarde wordt nooit overschreven.
@@ -15,6 +16,8 @@ let s = {}; try { s = require('./settings.json'); } catch (e) {}
 require('dotenv').config();
 
 const COMMIT = process.argv.includes('--commit');
+const SQL = process.argv.includes('--sql');
+const sqlStr = (v) => String(v == null ? '' : v).replace(/'/g, "''");
 const anthropicKey = s.anthropicKey || process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
 const HAIKU = 'claude-haiku-4-5-20251001';
 const CONCURRENCY = 3;   // Haiku ~3 req/s + token-rate-limit (zie CHANGELOG 594-import)
@@ -67,7 +70,7 @@ async function pool(items, n, fn) {
 }
 
 (async () => {
-  console.log(COMMIT ? '=== COMMIT — schrijft (bron=llm) ===\n' : '=== DRY-RUN — geen writes ===\n');
+  if (!SQL) console.log(COMMIT ? '=== COMMIT — schrijft (bron=llm) ===\n' : '=== DRY-RUN — geen writes ===\n');
   if (!anthropicKey) { console.error('Geen ANTHROPIC_KEY/anthropicKey gevonden.'); process.exit(1); }
 
   // 1) Data laden.
@@ -104,9 +107,14 @@ async function pool(items, n, fn) {
     return { concept: t.concept, voorstellen };
   });
 
+  const sqlWaarden = [];
   for (const r of resultaten) {
-    if (!r || r.error) { mislukt++; console.warn('  ! fout:', r?.error); continue; }
+    if (!r || r.error) { mislukt++; if (!SQL) console.warn('  ! fout:', r?.error); continue; }
     for (const v of r.voorstellen) {
+      if (SQL) {
+        sqlWaarden.push(`  ('${r.concept.id}', '${sqlStr(v.eenheid)}', ${v.gram}, ${v.confidence}, 'llm', '${sqlStr(v.toelichting)}')`);
+        continue;
+      }
       const vlag = v.confidence < 30 ? ' (lage confidence)' : '';
       console.log(`  ${r.concept.canonical_naam} · 1 ${v.eenheid} ≈ ${v.gram} g  [conf ${v.confidence}]${vlag} — ${v.toelichting}`);
       if (COMMIT) {
@@ -117,6 +125,17 @@ async function pool(items, n, fn) {
         if (error) { mislukt++; console.warn('    ! upsert fout:', error.message); } else geschreven++;
       }
     }
+  }
+
+  if (SQL) {
+    if (!sqlWaarden.length) { console.log('-- geen voorstellen om te seeden'); return; }
+    console.log('-- Fase B seeds (bron=llm) — plak dit in de Supabase SQL-editor.');
+    console.log('insert into public.concept_eenheid_kennis');
+    console.log('  (concept_id, eenheid, gram_per_eenheid, confidence, bron, toelichting)');
+    console.log('values');
+    console.log(sqlWaarden.join(',\n'));
+    console.log('on conflict (concept_id, eenheid) do nothing;');
+    return;
   }
   console.log(`\nKlaar. ${COMMIT ? `${geschreven} geschreven, ` : ''}${mislukt} mislukt.`);
   if (!COMMIT) console.log('Draai met --commit om te schrijven.');
