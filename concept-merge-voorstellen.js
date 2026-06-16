@@ -39,7 +39,11 @@ const sb = require('@supabase/supabase-js').createClient(
     voorstellen.push({ S, T: { id: tid, canonical_naam: key } });
   }
 
-  if (!voorstellen.length) { console.log('Geen merge-voorstellen — geen "prep-woord"-dubbelen gevonden.'); return; }
+  if (!voorstellen.length) {
+    // In --sql-modus géén proza op stdout (dat zou een pipe naar db.js breken) → een no-op comment.
+    console.log(SQL ? '-- geen merge-voorstellen' : 'Geen merge-voorstellen — geen "prep-woord"-dubbelen gevonden.');
+    return;
+  }
 
   if (SQL) {
     console.log('-- Passard: voeg prep-dubbele concepten samen (bron S → doel T). Plak in de Supabase SQL-editor.');
