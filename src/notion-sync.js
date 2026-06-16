@@ -746,7 +746,45 @@ class NotionSync {
       const { error } = await supabase.from('inkoop_prijzen').delete().lt('updated_at', runTs);
       if (error) console.warn('[mirror] prune fout:', error.message);
     }
+    // Passard (zelflerend): hang nieuwe/ongekoppelde rijen aan hun canonieke concept.
+    await this.koppelConcepten(supabase);
     return { count: rows.length };
+  }
+
+  // Koppel inkoop_prijzen-rijen zonder concept_id aan een ingredient_concept (canonical_naam).
+  // Idempotent en tolerant: ontbreekt de concept-laag (vóór de migratie) → stil overslaan.
+  async koppelConcepten(supabase) {
+    const norm = (s) => (s || '').toLowerCase().trim();
+    try {
+      const { data: los, error } = await supabase
+        .from('inkoop_prijzen').select('id, naam, canonical_naam').is('concept_id', null);
+      if (error) { if (!/concept_id/i.test(error.message)) console.warn('[concept] select fout:', error.message); return; }
+      if (!los || !los.length) return;
+
+      const { data: concepten, error: e2 } = await supabase.from('ingredient_concept').select('id, canonical_naam');
+      if (e2) { console.warn('[concept] tabel ontbreekt — draai zelflerend-fase-a-concept-laag.sql:', e2.message); return; }
+      const idByNaam = {};
+      for (const c of concepten || []) idByNaam[norm(c.canonical_naam)] = c.id;
+
+      let gekoppeld = 0;
+      for (const r of los) {
+        const cn = norm(r.canonical_naam || r.naam);
+        if (!cn) continue;
+        let cid = idByNaam[cn];
+        if (!cid) {
+          const { data: nw, error: e3 } = await supabase.from('ingredient_concept').insert({ canonical_naam: cn }).select('id').single();
+          if (e3) { // unique-conflict (race) → bestaande ophalen
+            const { data: best } = await supabase.from('ingredient_concept').select('id').eq('canonical_naam', cn).single();
+            cid = best?.id;
+          } else { cid = nw.id; }
+          if (cid) idByNaam[cn] = cid;
+        }
+        if (cid) { await supabase.from('inkoop_prijzen').update({ concept_id: cid }).eq('id', r.id); gekoppeld++; }
+      }
+      if (gekoppeld) console.log(`[concept] ${gekoppeld} nieuwe rij(en) aan een concept gekoppeld (Passard).`);
+    } catch (e) {
+      console.warn('[concept] koppelen overgeslagen:', e.message);
+    }
   }
 
   async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '', gramPerEenheid = null) {
