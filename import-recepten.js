@@ -20,7 +20,21 @@ const { parseRecept } = require('./src/recept-parse');
 const { schatYield, basisNaarOutputEenheid, normEenheid, matchLokaal, normNaam } = require('./src/recept-import-lib');
 const { matchRegelViaHaiku } = require('./src/bereiding-match');
 
-const notion = new Client({ auth: s.notionToken || process.env.NOTION_TOKEN });
+const notion = new Client({ auth: s.notionToken || process.env.NOTION_TOKEN, timeoutMs: 120000 });
+
+// Notion-calls kunnen incidenteel time-outen; retry met backoff i.p.v. de hele import laten falen.
+async function withRetry(fn, label = 'notion', n = 4) {
+  for (let i = 1; i <= n; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const tijdelijk = /timed out|timeout|ECONNRESET|fetch failed|rate.?limit|502|503|504/i.test(e.message || '');
+      if (i === n || !tijdelijk) throw e;
+      const wacht = 1000 * 2 ** (i - 1);
+      console.warn(`  ⚠ ${label} poging ${i} faalde (${e.message}); retry over ${wacht}ms`);
+      await new Promise(r => setTimeout(r, wacht));
+    }
+  }
+}
 
 // Welke Recipes-database hoort bij welk restaurant.
 const DB_LOCATIE = [
@@ -39,7 +53,7 @@ async function cellTekst(cell) {
     const leeg = !t.plain_text || t.plain_text.trim().toLowerCase() === 'untitled';
     if (t.type === 'mention' && t.mention?.type === 'page' && leeg) {
       try {
-        const p = await notion.pages.retrieve({ page_id: t.mention.page.id });
+        const p = await withRetry(() => notion.pages.retrieve({ page_id: t.mention.page.id }), 'mention');
         const tp = Object.values(p.properties).find(x => x.type === 'title');
         out += tp ? tp.title.map(z => z.plain_text).join('') : (t.plain_text || '');
       } catch { out += t.plain_text || ''; }
@@ -63,10 +77,10 @@ if (process.env.SUPABASE_URL && (process.env.SUPABASE_ANON_KEY || process.env.SU
 }
 
 async function leesTabellen(pageId) {
-  const ch = await notion.blocks.children.list({ block_id: pageId, page_size: 100 });
+  const ch = await withRetry(() => notion.blocks.children.list({ block_id: pageId, page_size: 100 }), 'blocks');
   let metaRows = [], ingredientRows = [];
   for (const t of ch.results.filter(b => b.type === 'table')) {
-    const rr = await notion.blocks.children.list({ block_id: t.id, page_size: 100 });
+    const rr = await withRetry(() => notion.blocks.children.list({ block_id: t.id, page_size: 100 }), 'table');
     // cellTekst resolvet page-mentions naar hun titel (zie boven); vandaar async.
     const rows = await Promise.all(rr.results.map(r => Promise.all(r.table_row.cells.map(c => cellTekst(c)))));
     if (t.table.table_width === 2) metaRows = rows; else ingredientRows = rows;
@@ -86,23 +100,62 @@ function bepaalYield(parsed) {
 }
 
 async function laadRecepten() {
-  const out = [];
+  // 1) Verzamel alle pagina's (snel: ~1 query-call per database).
+  const pages = [];
   for (const { id, locatie } of DB_LOCATIE) {
     let cursor, count = 0;
     do {
-      const q = await notion.databases.query({ database_id: id, page_size: 100, start_cursor: cursor });
+      const q = await withRetry(() => notion.databases.query({ database_id: id, page_size: 100, start_cursor: cursor }), 'query');
       for (const page of q.results) {
         const tp = Object.values(page.properties).find(p => p.type === 'title');
         const naam = tp ? tp.title.map(t => t.plain_text).join('').trim() : null;
-        const { metaRows, ingredientRows } = await leesTabellen(page.id);
-        const parsed = parseRecept({ naam, metaRows, ingredientRows });
-        out.push({ page_id: page.id, locatie, ...parsed, ...bepaalYield(parsed) });
+        pages.push({ page_id: page.id, locatie, naam });
         if (limit && ++count >= limit) break;
       }
       cursor = (!limit || count < limit) && q.has_more ? q.next_cursor : undefined;
     } while (cursor);
   }
+  // 2) Tabellen PARALLEL inlezen (batches van 6). Was strikt sequentieel (1 pagina tegelijk,
+  //    ~3-4 Notion-calls elk) → ~200 calls op een rij = de traagheid/timeouts. Nu: ~6 tegelijk.
+  const out = [];
+  const CONC = 3;  // Notion limiteert hard op ~3 req/s; hoger geeft enkel rate-limit-backoff.
+  for (let i = 0; i < pages.length; i += CONC) {
+    const res = await Promise.all(pages.slice(i, i + CONC).map(async (p) => {
+      const { metaRows, ingredientRows } = await leesTabellen(p.page_id);
+      const parsed = parseRecept({ naam: p.naam, metaRows, ingredientRows });
+      return { page_id: p.page_id, locatie: p.locatie, ...parsed, ...bepaalYield(parsed) };
+    }));
+    out.push(...res);
+    console.log(`  Notion ingelezen: ${Math.min(i + CONC, pages.length)}/${pages.length} recepten…`);
+  }
   return out;
+}
+
+// Mirror: ruwe receptdata (mét geresolvede mentions) wegschrijven naar Supabase `recept_bron`,
+// zodat her-matchen Notion niet meer hoeft te lezen. Tolerant als de tabel nog niet bestaat.
+async function mirrorNaarBron(recepten) {
+  if (!supabase) return;
+  const rows = recepten.filter(r => r.naam).map(r => ({
+    notion_page_id: r.page_id, locatie: r.locatie, naam: r.naam,
+    opbrengst: r.opbrengst ?? null, opbrengst_eenheid: r.opbrengst_eenheid ?? null,
+    regels: r.regels || [], gemirrord_op: new Date().toISOString(),
+  }));
+  for (let i = 0; i < rows.length; i += 200) {
+    const { error } = await supabase.from('recept_bron').upsert(rows.slice(i, i + 200), { onConflict: 'notion_page_id' });
+    if (error) { console.warn(`  ⚠ recept_bron mirror overgeslagen: ${error.message} (SQL receptencomposer-recept-bron.sql gedraaid?)`); return; }
+  }
+  console.log(`  ✓ ${rows.length} recepten gespiegeld naar recept_bron`);
+}
+
+// Lezen uit de mirror i.p.v. Notion (--from-mirror). Reconstrueert dezelfde vorm als laadRecepten.
+async function laadUitMirror() {
+  if (!supabase) throw new Error('--from-mirror vereist Supabase');
+  const { data, error } = await supabase.from('recept_bron').select('*');
+  if (error) throw new Error('recept_bron lezen mislukt: ' + error.message + ' (SQL gedraaid + gevuld?)');
+  return (data || []).map(r => {
+    const parsed = { naam: r.naam, opbrengst: r.opbrengst, opbrengst_eenheid: r.opbrengst_eenheid, regels: r.regels || [] };
+    return { page_id: r.notion_page_id, locatie: r.locatie, ...parsed, ...bepaalYield(parsed) };
+  });
 }
 
 async function laadIngredientIndex() {
@@ -138,7 +191,12 @@ async function leerAlias(ingredientId, receptNaam, index) {
   if (COMMIT && !supabase) { console.error('FOUT: --commit vereist SUPABASE_URL + SUPABASE_ANON_KEY in .env'); process.exit(1); }
   console.log(COMMIT ? '=== COMMIT — schrijft naar Supabase ===\n' : '=== DRY-RUN — geen writes ===\n');
 
-  const recepten = await laadRecepten();
+  // Bron: Notion (default) of de Supabase-mirror (--from-mirror, geen Notion-calls → instant).
+  const FROM_MIRROR = flag('--from-mirror');
+  const recepten = FROM_MIRROR ? await laadUitMirror() : await laadRecepten();
+  console.log(`  bron: ${FROM_MIRROR ? 'recept_bron (mirror)' : 'Notion'} — ${recepten.length} recepten`);
+  // Na een Notion-read: de mirror (her)vullen zodat een volgende run --from-mirror kan gebruiken.
+  if (!FROM_MIRROR && COMMIT) await mirrorNaarBron(recepten);
   const ingredientIndex = supabase ? await laadIngredientIndex() : [];
 
   // canonical_id + bereiding_id per recept (alleen bij commit echte ids).
@@ -173,6 +231,8 @@ async function leerAlias(ingredientId, receptNaam, index) {
   let nMatch = 0, nReview = 0, nComp = 0, nGeschat = 0, nIncompleet = 0, nHaiku = 0, nGeleerd = 0;
   if (USE_HAIKU) console.log('  (Haiku-fallback actief voor niet-lokaal herkende regels)\n');
 
+  // Fase A: bestaande componenten/review wissen + lokaal matchen; regels verzamelen als 'taken'.
+  const taken = [];  // { r, reg, bid, index?, m, via, geenHoev? }
   for (const r of recepten) {
     if (r.yield_geschat) nGeschat++;
     if (r.eind_yield == null) nIncompleet++;
@@ -181,31 +241,44 @@ async function leerAlias(ingredientId, receptNaam, index) {
       await supabase.from('bereiding_component').delete().eq('bereiding_id', bid);
       await supabase.from('bereiding_import_review').delete().eq('bereiding_id', bid);
     }
-    const regelInfo = [];
     for (const reg of r.regels) {
-      // Regel zonder hoeveelheid kan geen component zijn (NOT NULL) → naar review.
-      if (reg.hoeveelheid == null) {
+      if (reg.hoeveelheid == null) { taken.push({ r, reg, bid, geenHoev: true }); continue; }
+      const index = { ingredients: ingredientIndex, bereidingen: bereidingIndex.filter(b => b.locatie === r.locatie && b.namen[0].toLowerCase() !== (r.naam || '').toLowerCase()) };
+      const m = matchLokaal(reg.naam, index);
+      taken.push({ r, reg, bid, index, m, via: m ? `${(m.score * 100).toFixed(0)}%` : null });
+    }
+  }
+
+  // Fase B: Haiku PARALLEL (concurrency 10) voor de niet-lokaal-gematchte regels — dit was de bottleneck.
+  const teHaiku = USE_HAIKU ? taken.filter(t => !t.geenHoev && !t.m) : [];
+  if (teHaiku.length) console.log(`  lokaal: ${taken.filter(t => t.m).length} · naar Haiku: ${teHaiku.length}`);
+  const CONC = 3;  // laag houden: grote match-prompts × hoge concurrency overschrijdt de Anthropic token-rate-limit
+  for (let i = 0; i < teHaiku.length; i += CONC) {
+    await Promise.all(teHaiku.slice(i, i + CONC).map(async t => {
+      const hk = await matchRegelViaHaiku(t.reg.naam, {
+        ingredients: t.index.ingredients.map(c => ({ id: c.id, canonical: c.namen[0] })).filter(c => c.canonical),
+        bereidingen: t.index.bereidingen.map(b => ({ id: b.id, canonical: b.namen[0] })).filter(b => b.canonical),
+      }, anthropicKey);
+      if (hk && hk.id) { t.m = { id: hk.id, type: hk.type, score: hk.confidence / 100 }; t.via = `haiku ${hk.confidence}%`; nHaiku++; }
+    }));
+    if (teHaiku.length > CONC) console.log(`  Haiku ${Math.min(i + CONC, teHaiku.length)}/${teHaiku.length}…`);
+  }
+
+  // Fase C: schrijven + tellen + --details (per recept gegroepeerd).
+  const takenVoor = new Map();
+  for (const t of taken) { if (!takenVoor.has(t.r)) takenVoor.set(t.r, []); takenVoor.get(t.r).push(t); }
+  for (const r of recepten) {
+    const regelInfo = [];
+    for (const t of (takenVoor.get(r) || [])) {
+      const { reg, bid, m, via, geenHoev } = t;
+      if (geenHoev) {
         nReview++;
         regelInfo.push(`${reg.naam} → review (geen hoeveelheid)`);
         if (COMMIT && bid) await supabase.from('bereiding_import_review').insert({ bereiding_id: bid, regel_naam: reg.naam, hoeveelheid: null, eenheid: reg.eenheid });
         continue;
       }
-      // sub-bereidingen van dezelfde locatie krijgen voorrang
-      const index = { ingredients: ingredientIndex, bereidingen: bereidingIndex.filter(b => b.locatie === r.locatie && b.namen[0].toLowerCase() !== (r.naam || '').toLowerCase()) };
-      let m = matchLokaal(reg.naam, index);
-      let via = m ? `${(m.score * 100).toFixed(0)}%` : null;
-      // Fallback: laat Haiku de regel disambigueren als de lokale matcher niets vond.
-      if (!m && USE_HAIKU) {
-        const hk = await matchRegelViaHaiku(reg.naam, {
-          ingredients: index.ingredients.map(c => ({ id: c.id, canonical: c.namen[0] })).filter(c => c.canonical),
-          bereidingen: index.bereidingen.map(b => ({ id: b.id, canonical: b.namen[0] })).filter(b => b.canonical),
-        }, anthropicKey);
-        if (hk && hk.id) { m = { id: hk.id, type: hk.type, score: hk.confidence / 100 }; via = `haiku ${hk.confidence}%`; nHaiku++; }
-      }
       if (m && m.id) {
         nMatch++;
-        // Zelflerend: koppel deze receptnaam als alias als 'm nog niet exact bekend was
-        // (Haiku-match of fuzzy lokaal). Volgende keer vangt matchLokaal 'm direct.
         if (m.type === 'ingredient' && m.score < 1 && await leerAlias(m.id, reg.naam, ingredientIndex)) nGeleerd++;
         regelInfo.push(`${reg.naam} → ${m.type} (${via})`);
         if (COMMIT && bid) {

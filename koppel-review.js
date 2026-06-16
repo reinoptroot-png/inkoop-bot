@@ -72,8 +72,9 @@ async function leerAlias(ingredientId, receptNaam, index) {
   }
   console.log(`  lokaal gematcht: ${nLokaal} · naar Haiku: ${teHaiku.length}\n`);
 
-  // Stap 2: Haiku PARALLEL (concurrency 10) — dit was de bottleneck.
-  const CONC = 10;
+  // Stap 2: Haiku PARALLEL. Concurrency 3: met honderden bereidingen worden de prompts groot;
+  // hoger knalt over de Anthropic 500k-input-tokens/min-limiet (calls falen → regels terug naar review).
+  const CONC = 3;
   for (let i = 0; i < teHaiku.length; i += CONC) {
     const batch = teHaiku.slice(i, i + CONC);
     await Promise.all(batch.map(async (rv) => {
