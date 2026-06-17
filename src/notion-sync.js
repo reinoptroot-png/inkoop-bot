@@ -742,10 +742,36 @@ class NotionSync {
       }
       if (error) { console.warn('[mirror] upsert fout:', error.message); return { error: error.message }; }
     }
-    // Prune: alles wat deze run niet is bijgewerkt = niet meer in Notion → weg
+    // Prune: alles wat deze run niet is bijgewerkt = niet meer in Notion → weg.
+    // Maar: rijen die nog door een receptuur (bereiding_component) worden gebruikt mogen
+    // NIET hard verdwijnen — de FK bereiding_component_ingredient_id_fkey blokkeert anders
+    // het hele delete-statement (→ er werd voorheen helemaal niets geprund). Die houden we
+    // vast; de rest verwijderen we wel.
     if (rows.length) {
-      const { error } = await supabase.from('inkoop_prijzen').delete().lt('updated_at', runTs);
-      if (error) console.warn('[mirror] prune fout:', error.message);
+      const { data: stale } = await supabase.from('inkoop_prijzen').select('id').lt('updated_at', runTs);
+      const staleIds = (stale || []).map((r) => r.id);
+      if (staleIds.length) {
+        // Welke verouderde ids zijn nog in gebruik door een receptuur? Filter bereiding_component
+        // op precies die (kleine) set — niet de hele tabel ophalen (PostgREST capt op 1000 rijen,
+        // waardoor referenties voorbij rij 1000 gemist werden en de FK alsnog blokkeerde).
+        const inGebruik = new Set();
+        for (let i = 0; i < staleIds.length; i += 100) {
+          const { data: g } = await supabase
+            .from('bereiding_component')
+            .select('ingredient_id')
+            .in('ingredient_id', staleIds.slice(i, i + 100));
+          (g || []).forEach((r) => inGebruik.add(r.ingredient_id));
+        }
+        const teVerwijderen = staleIds.filter((id) => !inGebruik.has(id));
+        let verwijderd = 0;
+        for (let i = 0; i < teVerwijderen.length; i += 100) {
+          const { error } = await supabase.from('inkoop_prijzen').delete().in('id', teVerwijderen.slice(i, i + 100));
+          if (error) console.warn('[mirror] prune fout:', error.message);
+          else verwijderd += Math.min(100, teVerwijderen.length - i);
+        }
+        if (verwijderd) console.log(`[mirror] ${verwijderd} verouderde rij(en) verwijderd (niet meer in Notion).`);
+        if (inGebruik.size) console.log(`[mirror] ${inGebruik.size} verouderde rij(en) behouden — nog in gebruik door een receptuur.`);
+      }
     }
     // Passard (zelflerend): hang nieuwe/ongekoppelde rijen aan hun canonieke concept.
     await this.koppelConcepten(supabase);
