@@ -102,12 +102,22 @@ async function leerAlias(ingredientId, receptNaam, index) {
 
   // Stap 3: schrijven (alias + component + status). Snel; Supabase.
   console.log('');
+  // Canonieke naam van een match (voor het Passard-voorstel in de composer).
+  const naamVan = (type, id) => ((type === 'bereiding' ? bereidingIndex : ingredientIndex).find(x => x.id === id)?.namen || [])[0] || null;
+  const wisVoorstel = { voorstel_type: null, voorstel_id: null, voorstel_naam: null, voorstel_score: null };
   for (const rv of reviews || []) {
     const d = beslissing.get(rv.id);
-    if (!d) { nReview++; console.log(`  · ${rv.regel_naam} → blijft review`); continue; }
+    if (!d) { nReview++; if (COMMIT) await sb.from('bereiding_import_review').update(wisVoorstel).eq('id', rv.id); console.log(`  · ${rv.regel_naam} → blijft review`); continue; }
     const { m, via } = d;
-    // Trechtermond: twijfel niet auto-koppelen — laat als review, mens bevestigt in de composer.
-    if (!isZeker(d)) { nTwijfel++; console.log(`  ? ${rv.regel_naam} → twijfel (${via}) — blijft review, bevestig in composer`); continue; }
+    // Trechtermond: twijfel niet auto-koppelen — wél Passard's suggestie bewaren zodat de composer
+    // 'm als één-klik "Bevestig" toont (mens bevestigt de zwakke schakel).
+    if (!isZeker(d)) {
+      nTwijfel++;
+      const vnaam = naamVan(m.type, m.id);
+      if (COMMIT) await sb.from('bereiding_import_review').update({ voorstel_type: m.type, voorstel_id: m.id, voorstel_naam: vnaam, voorstel_score: Math.round(m.score * 100) / 100 }).eq('id', rv.id);
+      console.log(`  ? ${rv.regel_naam} → twijfel (${via}) — voorstel: ${vnaam || '?'} → bevestig in composer`);
+      continue;
+    }
     if (m.type === 'ingredient' && m.score < 1 && await leerAlias(m.id, rv.regel_naam, ingredientIndex)) nGeleerd++;
     console.log(`  ✓ ${rv.regel_naam} → ${m.type} (${via})`);
     if (COMMIT) {
