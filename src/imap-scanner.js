@@ -5,6 +5,40 @@ const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
 const { isLightspeedDagrapport, extractCsvLink, parseDagrapport } = require('./lightspeed');
 
+// ── Dedup op verwerkte e-mails (Supabase) ─────────────────────────────────────
+// Vervangt het broze "alleen UNSEEN"-mechanisme: we onthouden welke mails al
+// verwerkt zijn (message-id), zodat een ruimer venster geen dubbele Claude-calls
+// geeft, en in Mail geopende mails tóch verwerkt worden.
+function sbClient(settings) {
+  const url = settings.supabaseUrl || process.env.SUPABASE_URL;
+  const key = settings.supabaseKey || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY;
+  return (url && key) ? createClient(url, key) : null;
+}
+function emailKey(email) {
+  if (email.messageId) return String(email.messageId).trim();
+  const from = email.from?.value?.[0]?.address || '?';
+  const dt = email.date ? new Date(email.date).toISOString().slice(0, 10) : '?';
+  return `${from}|${email.subject || '?'}|${dt}`;
+}
+async function loadVerwerkteEmails(settings) {
+  const sb = sbClient(settings);
+  if (!sb) return new Set();
+  try {
+    const { data } = await sb.from('verwerkte_emails').select('email_key');
+    return new Set((data || []).map(r => r.email_key));
+  } catch { return new Set(); }
+}
+async function markEmailVerwerkt(settings, key, meta = {}) {
+  const sb = sbClient(settings);
+  if (!sb) return;
+  try {
+    await sb.from('verwerkte_emails').upsert({
+      email_key: key, leverancier: meta.leverancier || null, onderwerp: meta.onderwerp || null,
+      email_datum: meta.email_datum || null, producten: meta.producten || 0, verwerkt_op: new Date().toISOString(),
+    }, { onConflict: 'email_key' });
+  } catch {}
+}
+
 // Strikte whitelist: Supabase `leveranciers` (actief=true) is de ENIGE bron van
 // waarheid. Geen hardcoded fallback meer — onbekende afzenders worden genegeerd.
 // Bij ontbrekende/onbereikbare Supabase wordt er niets verwerkt (veilig).
@@ -153,7 +187,7 @@ class ImapScanner {
     this.settings = settings;
   }
 
-  fetchEmails({ markSeen = true, lookbackDays = 7, reprocess = false, debug = false } = {}) {
+  fetchEmails({ markSeen = false, lookbackDays = 45, reprocess = false, debug = false } = {}) {
     const log = debug ? (...a) => console.log(...a) : () => {};
     const user = this.settings.imapUser;
 
@@ -170,10 +204,9 @@ class ImapScanner {
 
       const since = new Date();
       since.setDate(since.getDate() - lookbackDays);
-      const criteria = reprocess
-        ? [['SINCE', since]]
-        : [['SINCE', since], 'UNSEEN'];
-      log(`[imap] Criteria: ${reprocess ? 'alle' : 'ongelezen'} emails sinds ${since.toISOString().split('T')[0]} (lookbackDays=${lookbackDays})`);
+      // Dedup gebeurt nu op message-id (verwerkte_emails), niet op de IMAP-gelezen-vlag.
+      const criteria = [['SINCE', since]];
+      log(`[imap] Criteria: alle emails sinds ${since.toISOString().split('T')[0]} (lookbackDays=${lookbackDays}); dedup via verwerkte_emails`);
 
       imap.once('ready', () => {
         log(`[imap] Verbinding OK — ${user}`);
@@ -338,11 +371,15 @@ ${text.substring(0, 6000)}`;
     }
   }
 
-  async scan({ markSeen = true, lookbackDays = 7, reprocess = false, debug = false } = {}) {
+  async scan({ markSeen = false, lookbackDays = 45, reprocess = false, debug = false } = {}) {
     const log = debug ? (...a) => console.log(...a) : () => {};
     const knownSenders = await loadKnownSenders(this.settings);
     log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
     const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
+    // Al verwerkte mails overslaan (tenzij --reprocess). Bespaart Claude-calls én
+    // vangt mails die je elders al opende (gelezen-vlag doet er niet meer toe).
+    const verwerkt = reprocess ? new Set() : await loadVerwerkteEmails(this.settings);
+    if (!reprocess) log(`[scan] ${verwerkt.size} eerder verwerkte mails bekend`);
     const allItems = [];
     const factuurRegels = []; // losse regels (vóór dedup) voor de factuurtotalen
     const nieuweLeveranciers = {};
@@ -351,6 +388,8 @@ ${text.substring(0, 6000)}`;
     for (const email of emails) {
       const subject = email.subject || '(geen onderwerp)';
       const senderAddress = email.from?.value?.[0]?.address || '(onbekend)';
+      const eKey = emailKey(email);
+      if (verwerkt.has(eKey)) { log(`[scan] Al verwerkt — overslaan: "${subject}"`); continue; }
 
       // Lightspeed dagrapport — CSV via downloadlink in de mail (apart van het factuur/whitelist-pad)
       if (isLightspeedDagrapport(email)) {
@@ -363,6 +402,7 @@ ${text.substring(0, 6000)}`;
             const dr = parseDagrapport(csvText);
             dagrapporten.push(dr);
             log(`[scan] Lightspeed dagrapport: ${dr.datum || '?'} — omzet ${dr.totale_omzet ?? '?'}, ${dr.gerechten.length} gerechten`);
+            if (!reprocess) await markEmailVerwerkt(this.settings, eKey, { leverancier: 'lightspeed', onderwerp: subject, email_datum: ymdDate(email.date) });
           } catch (e) { log(`[scan] dagrapport download/parse-fout: ${e.message}`); }
         } else {
           log(`[scan] Lightspeed-mail zonder CSV-link: "${subject}"`);
@@ -388,6 +428,7 @@ ${text.substring(0, 6000)}`;
         continue;
       }
       log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier}"`);
+      let emailProducten = 0;
       for (const att of email.attachments) {
         if (!att.contentType || !att.contentType.includes('pdf')) {
           log(`[scan] Bijlage overgeslagen — geen PDF (${att.contentType || 'onbekend type'}): "${att.filename}"`);
@@ -395,6 +436,7 @@ ${text.substring(0, 6000)}`;
         }
         const items = await this.parsePdfWithClaude(att.content, att.filename, debug);
         log(`[scan] "${att.filename}" → ${items.length} producten gevonden`);
+        emailProducten += items.length;
         allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '', leverancier_email: senderAddress })));
         // Factuurregels apart bewaren (vóór dedup) voor de factuurtotalen
         for (const i of items) factuurRegels.push({
@@ -402,6 +444,8 @@ ${text.substring(0, 6000)}`;
           factuurdatum: i.factuurdatum, leverancier: leverancier || i.leverancier || '', emailDatum: ymdDate(email.date),
         });
       }
+      // Mail als verwerkt vastleggen — volgende run slaat 'm over (geen dubbele Claude-calls).
+      if (!reprocess) await markEmailVerwerkt(this.settings, eKey, { leverancier, onderwerp: subject, email_datum: ymdDate(email.date), producten: emailProducten });
     }
 
     log(`[scan] Totaal voor deduplicatie: ${allItems.length} items`);
