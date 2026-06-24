@@ -49,7 +49,7 @@ async function run() {
 
   console.log('Verbinding maken met IMAP:', settings.imapUser, '@', settings.imapHost);
   const scanner1 = new ImapScanner(settings);
-  const items1 = await scanner1.scan({ markSeen: !dryRun, reprocess });
+  const items1 = await scanner1.scan({ markSeen: !dryRun, reprocess, lookbackDays: 30 });
   console.log('IMAP 1 OK —', items1.length, 'producten');
 
   let items2 = [];
@@ -62,7 +62,7 @@ async function run() {
     for (let poging = 1; poging <= 3; poging++) {
       try {
         scanner2 = new ImapScanner(cfg2);
-        items2 = await scanner2.scan({ markSeen: !dryRun, reprocess });
+        items2 = await scanner2.scan({ markSeen: !dryRun, reprocess, lookbackDays: 30 });
         console.log('IMAP 2 OK —', items2.length, 'producten');
         imap2Ok = true;
         break;
