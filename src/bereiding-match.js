@@ -54,29 +54,43 @@ Regels:
 - Match nooit duidelijk verschillende producten (rund ≠ varken, mozzarella ≠ burrata).`;
 }
 
-async function matchRegelViaHaiku(line, { ingredients = [], bereidingen = [] } = {}, anthropicKey) {
-  if (!anthropicKey || (!ingredients.length && !bereidingen.length)) return null;
+const VERCEL_PROXY = 'https://europizza-calculator.vercel.app/api/bereiding-match';
+
+async function matchViaVercel(line, ingredients, bereidingen) {
   try {
-    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    const resp = await fetch(VERCEL_PROXY, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': anthropicKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: HAIKU,
-        max_tokens: 300,
-        messages: [{ role: 'user', content: buildPrompt(line, ingredients, bereidingen) }],
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line, ingredients, bereidingen }),
     });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
-    if (data.error) throw new Error(data.error.message);
-    return parseMatchResponse(data.content?.[0]?.text || '', ingredients, bereidingen);
+    return data && data.id ? data : null;
   } catch (e) {
-    console.warn('[bereiding-match] Haiku fout:', e.message);
+    console.warn('[bereiding-match] Vercel-proxy fout:', e.message);
     return null;
   }
+}
+
+async function matchRegelViaHaiku(line, { ingredients = [], bereidingen = [] } = {}, anthropicKey) {
+  if (!ingredients.length && !bereidingen.length) return null;
+  // Probeer eerst direct (als key credits heeft), anders via Vercel-proxy.
+  if (anthropicKey) {
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': anthropicKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: HAIKU, max_tokens: 300, messages: [{ role: 'user', content: buildPrompt(line, ingredients, bereidingen) }] }),
+      });
+      const data = await resp.json();
+      if (!data.error) return parseMatchResponse(data.content?.[0]?.text || '', ingredients, bereidingen);
+      if (!/credit/i.test(data.error.message)) throw new Error(data.error.message);
+      // credit-fout → val terug op Vercel-proxy
+    } catch (e) {
+      if (!/credit/i.test(e.message)) { console.warn('[bereiding-match] Haiku fout:', e.message); return null; }
+    }
+  }
+  return matchViaVercel(line, ingredients, bereidingen);
 }
 
 module.exports = { matchRegelViaHaiku, parseMatchResponse, buildPrompt, HAIKU };

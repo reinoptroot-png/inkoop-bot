@@ -11,11 +11,13 @@
 
 let s = {}; try { s = require('./settings.json'); } catch (e) {}
 require('dotenv').config();
+// Haal de werkende ANTHROPIC_API_KEY ook op uit de calculator's .env.local (heeft credits).
+require('dotenv').config({ path: require('path').join(__dirname, '../../europizza-calculator/.env.local'), override: false });
 const { matchLokaal, normNaam } = require('./src/recept-import-lib');
 const { matchRegelViaHaiku } = require('./src/bereiding-match');
 
 const COMMIT = process.argv.includes('--commit');
-const anthropicKey = s.anthropicKey || process.env.ANTHROPIC_API_KEY;
+const anthropicKey = process.env.ANTHROPIC_API_KEY || s.anthropicKey;
 const USE_HAIKU = !process.argv.includes('--no-haiku') && !!anthropicKey;
 // Trechtermond: alleen HOGE-confidence auto-koppelen; twijfel blijft review (mens bevestigt
 // in de composer). Voorkomt foute auto-koppelingen (zoals "lams botten" ↔ "lams zwezerik").
@@ -60,9 +62,23 @@ async function leerAlias(ingredientId, receptNaam, index) {
   const { data: berRows } = await sb.from('bereiding').select('id, locatie, canonical_bereiding(canonical_naam)');
   const bereidingIndex = (berRows || []).map(b => ({ id: b.id, locatie: b.locatie, namen: [b.canonical_bereiding?.canonical_naam].filter(Boolean) }));
 
+  // Stap 0: auto-negeer niet-ingrediënten (geen hoeveelheid, of naam is een methode-header).
+  const NIET_INGREDIENT = /^(deel|stap|fase|onderdeel|methode|bereiding|introductie|afwerking|presentatie|basis|saus|crème)\s*\d*:?\s*$/i;
+  const { data: alleReviews } = await sb.from('bereiding_import_review')
+    .select('id, bereiding_id, regel_naam, hoeveelheid, eenheid').eq('status', 'pending');
+  let nNegeer = 0;
+  for (const rv of alleReviews || []) {
+    const isHeader = rv.hoeveelheid == null || NIET_INGREDIENT.test((rv.regel_naam || '').trim());
+    if (isHeader) {
+      nNegeer++;
+      console.log(`  ∅ ${rv.regel_naam} → auto-negeer (geen hoeveelheid / methode-header)`);
+      if (COMMIT) await sb.from('bereiding_import_review').update({ status: 'genegeerd' }).eq('id', rv.id);
+    }
+  }
+  console.log(`  auto-genegeerd: ${nNegeer}\n`);
+
   // Pending review-regels mét hoeveelheid (zonder hoeveelheid kan geen component worden).
-  const { data: reviews } = await sb.from('bereiding_import_review')
-    .select('id, bereiding_id, regel_naam, hoeveelheid, eenheid').eq('status', 'pending').not('hoeveelheid', 'is', null);
+  const reviews = (alleReviews || []).filter(rv => rv.hoeveelheid != null && !NIET_INGREDIENT.test((rv.regel_naam || '').trim()));
 
   const berLocatie = {}; for (const b of bereidingIndex) berLocatie[b.id] = b.locatie;
   let nLokaal = 0, nHaiku = 0, nGeleerd = 0, nReview = 0, nCyclus = 0, nTwijfel = 0;

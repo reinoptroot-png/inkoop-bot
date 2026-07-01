@@ -730,6 +730,10 @@ class NotionSync {
     for (let i = 0; i < rows.length; i += 100) {
       const batch = rows.slice(i, i + 100);
       let { error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'id' });
+      // Als id-conflict mislukt (bijv. duplicaat op naam+lev+eenheid): fallback op naam-constraint
+      if (error && /unique/i.test(error.message)) {
+        ({ error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'inkoop_prijzen_naam_lev_eed_uq' }));
+      }
       if (error && /gram_per_inkoopeenheid/i.test(error.message)) {
         zonderGram = true;
         console.warn('[mirror] kolom gram_per_inkoopeenheid ontbreekt — gespiegeld zonder dit veld. SQL: alter table inkoop_prijzen add column gram_per_inkoopeenheid numeric;');

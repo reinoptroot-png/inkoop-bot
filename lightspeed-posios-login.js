@@ -27,13 +27,12 @@ const ENTRY = 'https://euc2-web.posios.com/management/en-US/';
 const TIMEOUT = 60000;
 
 async function main() {
-  if (!USER || !PASS) { console.error('[ls-login] LS_POS_USER / LS_POS_PASS ontbreken'); process.exit(1); }
-
   // Lightspeed ID is beschermd met Cloudflare Turnstile (anti-bot). De submit-knop
   // blijft disabled tot Turnstile een token geeft — dat lukt niet headless. Draai
   // dit script daarom HEADED op een echte Mac (LS_HEADED=1): jij lost Turnstile +
   // login zelf op, het script pakt daarna de verse token en zet 'm in de secrets.
   const HEADED = !!process.env.LS_HEADED;
+  if (!HEADED && (!USER || !PASS)) { console.error('[ls-login] LS_POS_USER / LS_POS_PASS ontbreken'); process.exit(1); }
   console.log(`[ls-login] Browser starten (${HEADED ? 'headed — los login/Turnstile zelf op' : 'headless'})...`);
   const browser = await chromium.launch({ headless: !HEADED, args: ['--disable-blink-features=AutomationControlled'] });
   const context = await browser.newContext();

@@ -199,7 +199,9 @@ class ImapScanner {
         host: this.settings.imapHost || 'imap.one.com',
         port: 993,
         tls: true,
-        tlsOptions: { rejectUnauthorized: false }
+        tlsOptions: { rejectUnauthorized: false },
+        connTimeout: 20000,
+        authTimeout: 10000,
       });
 
       const since = new Date();
