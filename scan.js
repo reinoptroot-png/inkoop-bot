@@ -173,10 +173,13 @@ async function run() {
     console.log('   Voer uit zonder --dry-run voor de echte sync.\n');
   } else {
     console.log('\nKlaar!');
-    fs.appendFileSync(
-      path.join(__dirname, 'scan-log.txt'),
-      start + ' — ' + items.length + ' producten (' + result.updated + ' updated, ' + result.aliasAdded + ' alias, ' + result.created + ' nieuw)\n'
-    );
+    // Log-rotatie: houd max de laatste 90 regels bij (L-07 — voorheen onbeperkt appenden).
+    const logPad = path.join(__dirname, 'scan-log.txt');
+    const nieuweRegel = start + ' — ' + items.length + ' producten (' + result.updated + ' updated, ' + result.aliasAdded + ' alias, ' + result.created + ' nieuw)';
+    let regels = [];
+    try { regels = fs.readFileSync(logPad, 'utf8').split('\n').filter(Boolean); } catch {}
+    regels.push(nieuweRegel);
+    fs.writeFileSync(logPad, regels.slice(-90).join('\n') + '\n');
     // Herbereken bereiding_kostprijs zodat gewijzigde inkoopprijzen direct doorwerken in plates
     const computeUrl = process.env.COMPUTE_URL || _sf.computeUrl;
     if (computeUrl && (result.updated > 0 || result.created > 0)) {
