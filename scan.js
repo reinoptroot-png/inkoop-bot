@@ -177,6 +177,18 @@ async function run() {
       path.join(__dirname, 'scan-log.txt'),
       start + ' — ' + items.length + ' producten (' + result.updated + ' updated, ' + result.aliasAdded + ' alias, ' + result.created + ' nieuw)\n'
     );
+    // Herbereken bereiding_kostprijs zodat gewijzigde inkoopprijzen direct doorwerken in plates
+    const computeUrl = process.env.COMPUTE_URL || _sf.computeUrl;
+    if (computeUrl && (result.updated > 0 || result.created > 0)) {
+      try {
+        const fetch = require('node-fetch');
+        const resp = await fetch(computeUrl, { method: 'POST', timeout: 25000 });
+        const data = await resp.json();
+        console.log(`[compute] ${data.aantal ?? '?'} bereidingen herberekend`);
+      } catch (e) {
+        console.warn('[compute] herberekening mislukt:', e.message);
+      }
+    }
   }
 }
 
