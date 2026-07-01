@@ -31,6 +31,9 @@ const settings = {
   imapUser3:       process.env.IMAP_USER3        || _sf.imapUser3,
   imapPass3:       process.env.IMAP_PASS3        || _sf.imapPass3,
   imapHost3:       process.env.IMAP_HOST3        || _sf.imapHost3       || null,
+  imapUser4:       process.env.IMAP_USER4        || _sf.imapUser4,
+  imapPass4:       process.env.IMAP_PASS4        || _sf.imapPass4,
+  imapHost4:       process.env.IMAP_HOST4        || _sf.imapHost4       || null,
   notionToken:     process.env.NOTION_TOKEN      || process.env.notionToken      || _sf.notionToken,
   notionDbId:      process.env.NOTION_DB_ID      || process.env.notionDbId       || _sf.notionDbId      || 'b6258a232e6d4482b7b4f50cf449854f',
   anthropicKey:    process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY    || _sf.anthropicKey,
@@ -50,67 +53,45 @@ async function run() {
   const start = new Date().toISOString();
   console.log('\n=== Inkoop Bot scan — ' + start + (dryRun ? ' [DRY-RUN]' : '') + ' ===\n');
 
-  console.log('Verbinding maken met IMAP:', settings.imapUser, '@', settings.imapHost);
-  const scanner1 = new ImapScanner(settings);
-  const items1 = await scanner1.scan({ markSeen: !dryRun, reprocess, lookbackDays: 30 });
-  console.log('IMAP 1 OK —', items1.length, 'producten');
-
-  let items2 = [];
-  let scanner2 = null;
-  if (settings.imapUser2 && settings.imapPass2) {
-    const host2 = settings.imapHost2 || settings.imapHost;
-    console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', host2);
-    const cfg2 = { ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2, imapHost: host2 };
-    let imap2Ok = false;
-    const scanMetTimeout = (cfg, opts, ms) => Promise.race([
-      new ImapScanner(cfg).scan(opts),
-      new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${ms / 1000}s`)), ms)),
-    ]);
+  // Helper: scan één mailbox met retry + timeout; geeft { items, scanner } terug
+  const scanMailbox = async (nr, user, pass, host, opts) => {
+    const cfg = { ...settings, imapUser: user, imapPass: pass, imapHost: host || settings.imapHost };
+    console.log(`Verbinding maken met IMAP ${nr}:`, user, '@', cfg.imapHost);
     for (let poging = 1; poging <= 3; poging++) {
       try {
-        items2 = await scanMetTimeout(cfg2, { markSeen: !dryRun, reprocess, lookbackDays: 30 }, 30000);
-        console.log('IMAP 2 OK —', items2.length, 'producten');
-        imap2Ok = true;
-        break;
+        const scanner = new ImapScanner(cfg);
+        const items = await Promise.race([
+          scanner.scan(opts),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('IMAP timeout na 30s')), 30000)),
+        ]);
+        console.log(`IMAP ${nr} OK —`, items.length, 'producten');
+        return { items, scanner };
       } catch (e) {
-        console.warn(`IMAP 2 poging ${poging}/3 mislukt: ${e.message}`);
+        console.warn(`IMAP ${nr} poging ${poging}/3 mislukt: ${e.message}`);
         if (poging < 3) await new Promise(r => setTimeout(r, 3000));
       }
     }
-    if (!imap2Ok) {
-      console.warn('⚠️  IMAP 2 (europa.rest) overgeslagen na 3 pogingen — scan gaat door zonder tweede mailbox');
-      scanner2 = null;
-    }
-  }
+    console.warn(`⚠️  IMAP ${nr} (${user}) overgeslagen na 3 pogingen`);
+    return { items: [], scanner: null };
+  };
 
-  let items3 = [];
-  if (settings.imapUser3 && settings.imapPass3) {
-    const host3 = settings.imapHost3 || settings.imapHost;
-    console.log('Verbinding maken met IMAP:', settings.imapUser3, '@', host3);
-    const cfg3 = { ...settings, imapUser: settings.imapUser3, imapPass: settings.imapPass3, imapHost: host3 };
-    let imap3Ok = false;
-    const scanMetTimeout3 = (cfg, opts, ms) => Promise.race([
-      new ImapScanner(cfg).scan(opts),
-      new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${ms / 1000}s`)), ms)),
-    ]);
-    for (let poging = 1; poging <= 3; poging++) {
-      try {
-        items3 = await scanMetTimeout3(cfg3, { markSeen: !dryRun, reprocess, lookbackDays: 30 }, 30000);
-        console.log('IMAP 3 OK —', items3.length, 'producten');
-        imap3Ok = true;
-        break;
-      } catch (e) {
-        console.warn(`IMAP 3 poging ${poging}/3 mislukt: ${e.message}`);
-        if (poging < 3) await new Promise(r => setTimeout(r, 3000));
-      }
-    }
-    if (!imap3Ok) {
-      console.warn('⚠️  IMAP 3 (pakbon@europa.rest) overgeslagen na 3 pogingen — scan gaat door zonder derde mailbox');
-    }
-  }
+  const scanOpts = { markSeen: !dryRun, reprocess, lookbackDays: 30 };
+
+  const { items: items1, scanner: scanner1 } = await scanMailbox(1, settings.imapUser, settings.imapPass, settings.imapHost, scanOpts);
+  const { items: items2, scanner: scanner2 } = settings.imapUser2
+    ? await scanMailbox(2, settings.imapUser2, settings.imapPass2, settings.imapHost2, scanOpts)
+    : { items: [], scanner: null };
+  const { items: items3, scanner: scanner3 } = settings.imapUser3
+    ? await scanMailbox(3, settings.imapUser3, settings.imapPass3, settings.imapHost3, scanOpts)
+    : { items: [], scanner: null };
+  const { items: items4, scanner: scanner4 } = settings.imapUser4
+    ? await scanMailbox(4, settings.imapUser4, settings.imapPass4, settings.imapHost4, scanOpts)
+    : { items: [], scanner: null };
+
+  const allesScanners = [scanner1, scanner2, scanner3, scanner4].filter(Boolean);
 
   // Nieuwe food-leverancier kandidaten → meldingen (dedup gebeurt in de helper)
-  const kandidaten = [...(scanner1.nieuweLeveranciers || []), ...(scanner2 ? (scanner2.nieuweLeveranciers || []) : [])];
+  const kandidaten = allesScanners.flatMap(s => s.nieuweLeveranciers || []);
   if (kandidaten.length) {
     const n = await ImapScanner.schrijfNieuweLeverancierMeldingen(settings.supabaseUrl, settings.supabaseKey, kandidaten);
     if (n) console.log(`Nieuwe leverancier-meldingen aangemaakt: ${n}`);
@@ -127,7 +108,7 @@ async function run() {
   }
 
   // Lightspeed dagrapporten → Supabase (ook als er geen facturen zijn)
-  const dagrapporten = [...(scanner1.dagrapporten || []), ...(scanner2 ? (scanner2.dagrapporten || []) : [])];
+  const dagrapporten = allesScanners.flatMap(s => s.dagrapporten || []);
   if (dagrapporten.length && settings.supabaseUrl && settings.supabaseKey) {
     const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
     for (const dr of dagrapporten) {
@@ -143,7 +124,7 @@ async function run() {
 
   // Dedupliceer over alle mailboxen
   const map = {};
-  for (const item of [...items1, ...items2, ...items3]) {
+  for (const item of [...items1, ...items2, ...items3, ...items4]) {
     const key = item.ingredient.toLowerCase().trim();
     if (!map[key]) {
       map[key] = { ...item, ingredient: key, count: 1 };
