@@ -28,6 +28,9 @@ const settings = {
   imapUser2:       process.env.IMAP_USER2        || _sf.imapUser2,
   imapPass2:       process.env.IMAP_PASS2        || _sf.imapPass2,
   imapHost2:       process.env.IMAP_HOST2        || _sf.imapHost2       || null,
+  imapUser3:       process.env.IMAP_USER3        || _sf.imapUser3,
+  imapPass3:       process.env.IMAP_PASS3        || _sf.imapPass3,
+  imapHost3:       process.env.IMAP_HOST3        || _sf.imapHost3       || null,
   notionToken:     process.env.NOTION_TOKEN      || process.env.notionToken      || _sf.notionToken,
   notionDbId:      process.env.NOTION_DB_ID      || process.env.notionDbId       || _sf.notionDbId      || 'b6258a232e6d4482b7b4f50cf449854f',
   anthropicKey:    process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY    || _sf.anthropicKey,
@@ -59,21 +62,50 @@ async function run() {
     console.log('Verbinding maken met IMAP:', settings.imapUser2, '@', host2);
     const cfg2 = { ...settings, imapUser: settings.imapUser2, imapPass: settings.imapPass2, imapHost: host2 };
     let imap2Ok = false;
+    const scanMetTimeout = (cfg, opts, ms) => Promise.race([
+      new ImapScanner(cfg).scan(opts),
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${ms / 1000}s`)), ms)),
+    ]);
     for (let poging = 1; poging <= 3; poging++) {
       try {
-        scanner2 = new ImapScanner(cfg2);
-        items2 = await scanner2.scan({ markSeen: !dryRun, reprocess, lookbackDays: 30 });
+        items2 = await scanMetTimeout(cfg2, { markSeen: !dryRun, reprocess, lookbackDays: 30 }, 30000);
         console.log('IMAP 2 OK —', items2.length, 'producten');
         imap2Ok = true;
         break;
       } catch (e) {
         console.warn(`IMAP 2 poging ${poging}/3 mislukt: ${e.message}`);
-        if (poging < 3) await new Promise(r => setTimeout(r, 5000 * poging));
+        if (poging < 3) await new Promise(r => setTimeout(r, 3000));
       }
     }
     if (!imap2Ok) {
       console.warn('⚠️  IMAP 2 (europa.rest) overgeslagen na 3 pogingen — scan gaat door zonder tweede mailbox');
       scanner2 = null;
+    }
+  }
+
+  let items3 = [];
+  if (settings.imapUser3 && settings.imapPass3) {
+    const host3 = settings.imapHost3 || settings.imapHost;
+    console.log('Verbinding maken met IMAP:', settings.imapUser3, '@', host3);
+    const cfg3 = { ...settings, imapUser: settings.imapUser3, imapPass: settings.imapPass3, imapHost: host3 };
+    let imap3Ok = false;
+    const scanMetTimeout3 = (cfg, opts, ms) => Promise.race([
+      new ImapScanner(cfg).scan(opts),
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${ms / 1000}s`)), ms)),
+    ]);
+    for (let poging = 1; poging <= 3; poging++) {
+      try {
+        items3 = await scanMetTimeout3(cfg3, { markSeen: !dryRun, reprocess, lookbackDays: 30 }, 30000);
+        console.log('IMAP 3 OK —', items3.length, 'producten');
+        imap3Ok = true;
+        break;
+      } catch (e) {
+        console.warn(`IMAP 3 poging ${poging}/3 mislukt: ${e.message}`);
+        if (poging < 3) await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    if (!imap3Ok) {
+      console.warn('⚠️  IMAP 3 (pakbon@europa.rest) overgeslagen na 3 pogingen — scan gaat door zonder derde mailbox');
     }
   }
 
@@ -109,9 +141,9 @@ async function run() {
     }
   }
 
-  // Dedupliceer over beide mailboxen
+  // Dedupliceer over alle mailboxen
   const map = {};
-  for (const item of [...items1, ...items2]) {
+  for (const item of [...items1, ...items2, ...items3]) {
     const key = item.ingredient.toLowerCase().trim();
     if (!map[key]) {
       map[key] = { ...item, ingredient: key, count: 1 };
@@ -167,8 +199,19 @@ async function run() {
   }
 }
 
-run().catch(e => {
-  console.error('\nFout:', e.message);
-  console.error(e.stack);
-  process.exit(1);
-});
+run()
+  .then(() => {
+    // Na de scan: bereiding-regels automatisch oplossen (koppel-review --commit).
+    const { execFileSync } = require('child_process');
+    try {
+      console.log('\n--- koppel-review ---');
+      execFileSync('/usr/local/bin/node', ['koppel-review.js', '--commit'], { stdio: 'inherit', timeout: 120000 });
+    } catch (e) {
+      console.warn('[koppel-review] fout:', e.message);
+    }
+  })
+  .catch(e => {
+    console.error('\nFout:', e.message);
+    console.error(e.stack);
+    process.exit(1);
+  });
