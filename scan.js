@@ -201,7 +201,11 @@ run()
     const { execFileSync } = require('child_process');
     try {
       console.log('\n--- koppel-review ---');
-      execFileSync('/usr/local/bin/node', ['koppel-review.js', '--commit'], { stdio: 'inherit', timeout: 120000 });
+      // 120s was te krap geworden: bij de huidige review-achterstand (291 items, Haiku-fallback
+      // ~1.2/s) duurt een volledige koppel-review-run ~4 minuten, dus de oude timeout kapte 'm
+      // halverwege af — elke dag opnieuw, zonder dat de achterstand ooit kromp. 10 minuten geeft
+      // ruim marge; de volgende cronjob (platessync, 12:20) start pas 20 minuten na deze.
+      execFileSync('/usr/local/bin/node', ['koppel-review.js', '--commit'], { stdio: 'inherit', timeout: 600000 });
     } catch (e) {
       console.warn('[koppel-review] fout:', e.message);
     }

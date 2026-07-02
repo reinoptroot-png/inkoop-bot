@@ -1,6 +1,72 @@
 const { Client } = require('@notionhq/client');
+const { Client: PgClient } = require('pg');
 const fetch = require('node-fetch');
 const { conceptSleutel } = require('./recept-import-lib');
+
+// Duplicaat-fallback (naam+leverancier+eenheid) rechtstreeks via SQL i.p.v. PostgREST: de
+// unique-constraint waarop we hier matchen (inkoop_prijzen_naam_lev_eed_uq) is een EXPRESSIE-index
+// (naam, lower(coalesce(leverancier,'')), lower(coalesce(eenheid,''))) — PostgREST's upsert
+// { onConflict: '<naam>' } accepteert alleen een kale kolomlijst, geen index/constraint-naam en geen
+// expressies. Met de indexnaam erin faalde dit altijd met "column ... does not exist". Rechtstreekse
+// SQL kan wél op de exacte expressie matchen.
+//
+// Eén batch kan tegelijk twee soorten conflicten bevatten: (a) een normale her-sync (id bestaat al —
+// gewoon updaten) en (b) een écht Notion-datadubbel (twee pagina's/id's voor hetzelfde
+// naam+leverancier+eenheid). Eén ON CONFLICT-doel per statement dekt niet allebei, en Postgres staat
+// ook niet toe dat één multi-row INSERT dezelfde doelrij twee keer in dezelfde batch raakt. Daarom
+// per rij, sequentieel: probeer eerst op id (normale re-sync); levert dat een naam+lev+eenheid-
+// botsing op (een ANDER id bezit deze identiteit al), dan update die bestaande rij i.p.v. een tweede
+// rij voor hetzelfde fysieke product aan te maken — precies de intentie van de oorspronkelijke
+// "duplicaat op naam+lev+eenheid"-fallback.
+async function upsertViaNaamLevEenheid(rows) {
+  if (!rows.length) return;
+  if (!process.env.SUPABASE_DB_URL) throw new Error('SUPABASE_DB_URL ontbreekt — kan duplicaat-fallback (naam+leverancier+eenheid) niet uitvoeren');
+
+  const cols = Object.keys(rows[0]);
+  const updateCols = cols.filter(c => c !== 'id');
+  const client = new PgClient({ connectionString: process.env.SUPABASE_DB_URL, ssl: { rejectUnauthorized: false } });
+  await client.connect();
+  const dubbelNamen = [];
+  try {
+    await client.query('begin');
+    for (const r of rows) {
+      const vals = cols.map(c => r[c]);
+      // Savepoint per rij: als de insert faalt, blokkeert een kale rollback de rest van de
+      // transactie ("current transaction is aborted") — een savepoint laat alleen déze rij
+      // terugdraaien zodat de fallback-update en de volgende rijen gewoon door kunnen.
+      await client.query('savepoint rij');
+      try {
+        await client.query(
+          `insert into inkoop_prijzen (${cols.map(c => `"${c}"`).join(',')}) values (${cols.map((_, j) => `$${j + 1}`).join(',')})
+           on conflict (id) do update set ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`,
+          vals
+        );
+      } catch (e) {
+        await client.query('rollback to savepoint rij');
+        if (!/inkoop_prijzen_naam_lev_eed_uq/.test(e.message)) throw e;
+        // Ander id bezit deze naam+leverancier+eenheid al → die bestaande rij verversen, geen nieuwe
+        // rij voor hetzelfde fysieke product aanmaken. Het eigen (nieuwere) id van deze Notion-pagina
+        // vervalt hier bewust — de eerder gekozen canonieke rij blijft de bron van waarheid.
+        dubbelNamen.push(r.naam);
+        const setCols = updateCols.filter(c => c !== 'naam' && c !== 'leverancier' && c !== 'eenheid');
+        await client.query(
+          `update inkoop_prijzen set ${setCols.map((c, j) => `"${c}" = $${j + 1}`).join(', ')}
+           where naam = $${setCols.length + 1} and lower(coalesce(leverancier, '')) = lower(coalesce($${setCols.length + 2}, '')) and lower(coalesce(eenheid, '')) = lower(coalesce($${setCols.length + 3}, ''))`,
+          [...setCols.map(c => r[c]), r.naam, r.leverancier, r.eenheid]
+        );
+      }
+    }
+    await client.query('commit');
+  } catch (e) {
+    try { await client.query('rollback'); } catch {}
+    throw e;
+  } finally {
+    await client.end();
+  }
+  if (dubbelNamen.length) {
+    console.warn(`[mirror] ${dubbelNamen.length} echte Notion-dubbel(en) (zelfde naam+leverancier+eenheid, andere pagina) samengevoegd i.p.v. dubbel opgeslagen — controleer in Notion: ${dubbelNamen.slice(0, 10).join(', ')}`);
+  }
+}
 
 // --- Fuzzy match helpers ---
 function levenshtein(a, b) {
@@ -730,9 +796,15 @@ class NotionSync {
     for (let i = 0; i < rows.length; i += 100) {
       const batch = rows.slice(i, i + 100);
       let { error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'id' });
-      // Als id-conflict mislukt (bijv. duplicaat op naam+lev+eenheid): fallback op naam-constraint
+      // Als id-conflict mislukt (bijv. duplicaat op naam+lev+eenheid): fallback op de naam+leverancier+
+      // eenheid-identiteit, via rechtstreekse SQL (zie upsertViaNaamLevEenheid hierboven).
       if (error && /unique/i.test(error.message)) {
-        ({ error } = await supabase.from('inkoop_prijzen').upsert(strip(batch), { onConflict: 'inkoop_prijzen_naam_lev_eed_uq' }));
+        try {
+          await upsertViaNaamLevEenheid(strip(batch));
+          error = null;
+        } catch (e) {
+          error = { message: e.message };
+        }
       }
       if (error && /gram_per_inkoopeenheid/i.test(error.message)) {
         zonderGram = true;
