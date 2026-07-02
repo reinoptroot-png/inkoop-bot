@@ -60,9 +60,13 @@ async function run() {
     for (let poging = 1; poging <= 3; poging++) {
       try {
         const scanner = new ImapScanner(cfg);
+        // pakbon@europa.rest liep herhaaldelijk vast op 30s (mailbox 1/2 op dezelfde host/poort wél
+        // binnen die tijd) — waarschijnlijk gewoon een tragere mailbox, geen auth-probleem. Ruimere
+        // marge als eerste, goedkope mitigatie; als 't blijft mislukken zit het dieper (server-kant).
+        const timeoutMs = 60000;
         const items = await Promise.race([
           scanner.scan(opts),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('IMAP timeout na 30s')), 30000)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${timeoutMs / 1000}s`)), timeoutMs)),
         ]);
         console.log(`IMAP ${nr} OK —`, items.length, 'producten');
         return { items, scanner };
