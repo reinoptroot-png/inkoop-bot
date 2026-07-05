@@ -1,8 +1,12 @@
 #!/usr/bin/env node
+const path = require('path');
+// scan.js draaide tot nu toe zonder dotenv (alle instellingen kwamen via settings.json-fallbacks) —
+// prima totdat notion-sync.js's duplicaat-fallback SUPABASE_DB_URL nodig had, die alleen in .env
+// staat (niet in settings.json). Zonder dit faalde die fallback met "SUPABASE_DB_URL ontbreekt".
+require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
 const ImapScanner = require('./src/imap-scanner');
 const NotionSync = require('./src/notion-sync');
 const { createClient } = require('@supabase/supabase-js');
-const path = require('path');
 const fs = require('fs');
 
 // Lerende non-food blacklist laden (zelfde bron als headless.js).
