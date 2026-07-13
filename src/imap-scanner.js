@@ -315,7 +315,7 @@ Regels:
 - "factuurtotaal": het EINDtotaal van de hele factuur (het te betalen bedrag) als getal, als dat expliciet op de factuur staat. Null als er geen eindtotaal staat.
 
 Factuur tekst:
-${text.substring(0, 6000)}`;
+${text.substring(0, 24000)}`;
 
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -327,7 +327,7 @@ ${text.substring(0, 6000)}`;
         },
         body: JSON.stringify({
           model: 'claude-opus-4-5',
-          max_tokens: 8000, // ruim genoeg voor lange facturen met alle extra velden per regel
+          max_tokens: 16000, // 8000 kapte lange facturen (>~40 regels) halverwege af; 16000 blijft onder de non-streaming HTTP-timeout
           messages: [{ role: 'user', content: prompt }]
         })
       });

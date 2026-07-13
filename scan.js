@@ -43,7 +43,7 @@ const settings = {
   anthropicKey:    process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_KEY    || _sf.anthropicKey,
   alertThreshold:  parseInt(process.env.ALERT_THRESHOLD || '') || _sf.alertThreshold || 10,
   supabaseUrl:     process.env.SUPABASE_URL      || _sf.supabaseUrl,
-  supabaseKey:     process.env.SUPABASE_KEY      || _sf.supabaseKey,
+  supabaseKey:     process.env.SUPABASE_KEY      || process.env.SUPABASE_ANON_KEY || _sf.supabaseKey,
 };
 
 const required = { notionToken: 'NOTION_TOKEN', imapUser: 'IMAP_USER', imapPass: 'IMAP_PASS', anthropicKey: 'ANTHROPIC_KEY (of ANTHROPIC_API_KEY)' };
@@ -67,7 +67,11 @@ async function run() {
         // pakbon@europa.rest liep herhaaldelijk vast op 30s (mailbox 1/2 op dezelfde host/poort wél
         // binnen die tijd) — waarschijnlijk gewoon een tragere mailbox, geen auth-probleem. Ruimere
         // marge als eerste, goedkope mitigatie; als 't blijft mislukken zit het dieper (server-kant).
-        const timeoutMs = 60000;
+        // Update 2026-07-13: de timeout omvat óók het Claude-parsen van de PDF's, dus 60s was zelfs
+        // voor een normale dag pakbonnen te krap (meerdere PDF's × parsetijd). Nu 3 min standaard;
+        // voor een inhaalslag overschrijfbaar via IMAP_TIMEOUT_MS. Verwerkte mails staan per stuk in
+        // het verwerkt-ledger, dus een afgebroken run gaat de volgende keer verder waar 'ie was.
+        const timeoutMs = parseInt(process.env.IMAP_TIMEOUT_MS || '', 10) || 180000;
         const items = await Promise.race([
           scanner.scan(opts),
           new Promise((_, rej) => setTimeout(() => rej(new Error(`IMAP timeout na ${timeoutMs / 1000}s`)), timeoutMs)),
@@ -148,22 +152,25 @@ async function run() {
   const items = Object.values(map);
   console.log('Gescand: ' + items.length + ' producten uit facturen');
 
+  const notion = new NotionSync(settings);
+  let result = null;
+
   if (items.length === 0) {
     console.log('Geen nieuwe facturen gevonden.');
-    return;
+  } else {
+    if (dryRun) {
+      console.log('\nProducten gevonden:');
+      items.forEach(i => console.log(`  • ${i.ingredient} — €${i.price}/${i.eenheid} (${i.leverancier})`));
+    }
+
+    const learnedBlacklist = await loadLearnedBlacklist(settings);
+    if (learnedBlacklist.length) console.log('Lerende blacklist:', learnedBlacklist.length, 'namen geladen');
+    result = await notion.syncAll(items, { dryRun, learnedBlacklist });
   }
 
-  if (dryRun) {
-    console.log('\nProducten gevonden:');
-    items.forEach(i => console.log(`  • ${i.ingredient} — €${i.price}/${i.eenheid} (${i.leverancier})`));
-  }
-
-  const learnedBlacklist = await loadLearnedBlacklist(settings);
-  if (learnedBlacklist.length) console.log('Lerende blacklist:', learnedBlacklist.length, 'namen geladen');
-  const notion = new NotionSync(settings);
-  const result = await notion.syncAll(items, { dryRun, learnedBlacklist });
-
-  // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen)
+  // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen).
+  // Draait óók zonder nieuwe facturen, zodat Supabase inkoop_prijzen (→ Dashboard
+  // "Producten") in sync blijft; stond voorheen ná de early-return en werd dan overgeslagen.
   if (!dryRun && settings.supabaseUrl && settings.supabaseKey) {
     try {
       const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
@@ -171,6 +178,9 @@ async function run() {
       if (m?.count != null) console.log(`  ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
     } catch (e) { console.warn('[mirror] fout:', e.message); }
   }
+
+  // Geen nieuwe facturen → mirror is gedaan, resultaat-samenvatting overslaan.
+  if (!result) return;
 
   console.log('\n--- Resultaat ---');
   console.log(`  Bijgewerkt : ${result.updated}`);
