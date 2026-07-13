@@ -6,3 +6,4 @@ settings.json
 .env
 dist/
 out/
+.next/
