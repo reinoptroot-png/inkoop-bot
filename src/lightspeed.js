@@ -75,14 +75,19 @@ function parseDagrapport(csvText, fallbackDatum = null) {
     }
     return null;
   };
-  const totale_omzet  = findVal(/^total\s*revenue|totale?\s*omzet|gross\s*sales/);
-  const bar_omzet     = findVal(/^bar\s*revenue|\bbar\b|dranken|beverage/);
-  const keuken_omzet  = findVal(/^restaurant\s*revenue|keuken|kitchen/);
   const aantal_gasten = findVal(/^customers|gasten|couverts?|covers|guests/);
   const aantal_tafels = findVal(/^tables?\s*served|tafels?|^tables/);
 
-  // Gerechten uit de CATEGORY REVENUES sectie: per-gerecht = rijen met gevulde PRODUCT-kolom
+  // Gerechten uit de CATEGORY REVENUES sectie: per-gerecht = rijen met gevulde PRODUCT-kolom.
+  // Kolommen: CATEGORY;CATEGORY-TYPE;PRODUCT;DISCOUNT;PRICE;#;TOTAL;COST;PROFIT;VAT RATE;VAT;TOTAL REVENUE
+  // Dit format kent geen aparte "bar revenue"/"restaurant revenue"-samenvattingsregel die het
+  // bar/keuken-onderscheid maakt ("restaurant revenue" is het HELE-bedrijf-totaal, incl. bar) —
+  // de enige plek waar bar vs. keuken écht gesplitst is, is deze sectie (via CATEGORY-TYPE).
+  // Bedragen zijn hier ook consistent excl. btw te maken (TOTAL REVENUE − VAT), zodat totale_omzet
+  // niet incl.-btw wordt (wat "Total revenue:" bovenin het rapport wél is, en dat is inconsistent
+  // met de rest van het systeem — VK-prijzen/foodcost rekenen overal excl. btw).
   const gerechten = [];
+  let bar_omzet = null, keuken_omzet = null;
   const secIdx = rows.findIndex(r => /category\s*revenues/i.test(r.join(' ')));
   if (secIdx >= 0) {
     let hi = secIdx + 1;
@@ -95,20 +100,28 @@ function parseDagrapport(csvText, fallbackDatum = null) {
     const cTotaal = findCol(/^total$/, /^totaal$/, /bedrag|amount/);
     const cCat    = findCol(/^category$/, /^categorie$/);
     const cType   = findCol(/category[\s-]*type/, /type/);
+    const cVat    = findCol(/^vat$/);
+    const cTotRev = findCol(/total\s*revenue/);
     // Per gerecht de CATEGORY-TYPE onthouden (Keuken = food, Wijn/Bier/… = drank).
     // Die staat alleen op de categorie-aggregaatrij (lege PRODUCT-cel); we dragen
-    // hem mee naar de onderliggende productrijen.
+    // hem mee naar de onderliggende productrijen én sommeren daar bar/keuken-omzet.
     let huidigeCat = '', huidigeType = '';
+    bar_omzet = 0; keuken_omzet = 0;
     for (let i = hi + 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r.join('').trim()) break;                                  // lege rij = einde sectie
       const naam = (cNaam >= 0 ? r[cNaam] : '').trim();               // category-aggregaatrijen hebben lege PRODUCT-cel
       if (!naam) {                                                    // categorie-header
         const cat = cCat >= 0 ? (r[cCat] || '').trim() : '';
-        if (cat) { huidigeCat = cat; huidigeType = cType >= 0 ? (r[cType] || '').trim() : ''; }
+        if (cat) {
+          huidigeCat = cat; huidigeType = cType >= 0 ? (r[cType] || '').trim() : '';
+          const isKeuken = /keuken|kitchen|food/i.test(huidigeType);
+          const net = (cTotRev >= 0 ? toNum(r[cTotRev]) : 0 || 0) - (cVat >= 0 ? toNum(r[cVat]) : 0 || 0);
+          if (Number.isFinite(net)) { if (isKeuken) keuken_omzet += net; else bar_omzet += net; }
+        }
         continue;
       }
-      if (/^total$/i.test(naam)) continue;
+      if (/^total$/i.test(naam) || /^discount\b/i.test(naam)) continue; // korting-/totaalregels niet als gerecht
       gerechten.push({
         naam,
         aantal: cAantal >= 0 ? toNum(r[cAantal]) : null,
@@ -119,7 +132,12 @@ function parseDagrapport(csvText, fallbackDatum = null) {
         food: /keuken|kitchen|food/i.test(huidigeType),
       });
     }
+    bar_omzet = Math.round(bar_omzet * 100) / 100;
+    keuken_omzet = Math.round(keuken_omzet * 100) / 100;
   }
+  const totale_omzet = (bar_omzet != null && keuken_omzet != null)
+    ? Math.round((bar_omzet + keuken_omzet) * 100) / 100
+    : findVal(/^total\s*revenue|totale?\s*omzet|gross\s*sales/); // fallback: ongesplitst format
 
   return { datum, totale_omzet, bar_omzet, keuken_omzet, aantal_gasten, aantal_tafels, gerechten };
 }

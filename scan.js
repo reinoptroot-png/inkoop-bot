@@ -227,17 +227,6 @@ run()
     } catch (e) {
       console.warn('[koppel-review] fout:', e.message);
     }
-    // Lightspeed-omzet: het gratis alternatief voor de betaalde K-Series API. Lightspeed mailt
-    // elke ochtend een "day report" naar dezelfde mailbox (facturen@europizza.rest) die hierboven
-    // al gescand is — dit haalt de CSV-link eruit en vult `dagrapport` (dashboard-omzetgrafiek +
-    // Bestseller × marge). Eigen dedup (verwerkte_emails), faalt dit onderdeel dan gaat de rest
-    // van de dagelijkse run gewoon door.
-    try {
-      console.log('\n--- lightspeed dag-mail ---');
-      execFileSync('/usr/local/bin/node', ['lightspeed-daymail-scan.js'], { stdio: 'inherit', timeout: 120000 });
-    } catch (e) {
-      console.warn('[ls-daymail] fout:', e.message);
-    }
   })
   .catch(e => {
     console.error('\nFout:', e.message);
