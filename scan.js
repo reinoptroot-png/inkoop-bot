@@ -134,6 +134,16 @@ async function run() {
     }
   }
 
+  // Factuurtotalen → Supabase inkoop_facturen (echte ingekochte euro's per factuur).
+  // headless.js schreef dit al; het launchd-pad via scan.js nog niet — het dashboard
+  // leest hieruit de inkoop-per-dag. Upsert op factuurnr voorkomt dubbels.
+  const facturen = allesScanners.flatMap(s => s.facturen || []);
+  if (facturen.length && settings.supabaseUrl && settings.supabaseKey) {
+    const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+    const { error } = await sb.from('inkoop_facturen').upsert(facturen, { onConflict: 'factuurnr' });
+    console.log(error ? `[facturen] schrijffout: ${error.message}` : `${facturen.length} factuurtotaal(en) → inkoop_facturen`);
+  }
+
   // Dedupliceer over alle mailboxen
   const map = {};
   for (const item of [...items1, ...items2, ...items3, ...items4]) {
