@@ -37,10 +37,30 @@ function isLightspeedDagrapport(email) {
   return isLightspeed(email) && !!extractCsvLink(email);
 }
 
+// Eén CSV-regel splitsen mét correcte quote-verwerking: een naaive l.split(delim) liet een
+// dubbel-gequote naam als """Caprese salade""" (CSV-escaping van een letterlijke ") staan als
+// ""Caprese salade"" — de buitenste quotes werden gestript maar de geëscapete binnenste ("" → ")
+// niet herkend. Deze parser volgt de RFC4180-regel: binnen een gequote cel betekent "" één
+// letterlijke ".
+function splitLine(line, delim) {
+  const cells = []; let cur = ''; let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else cur += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === delim) { cells.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  cells.push(cur.trim());
+  return cells;
+}
 function splitCsv(text) {
   const firstLine = (text.split(/\r?\n/).find(l => l.trim()) || '');
   const delim = (firstLine.match(/;/g) || []).length > (firstLine.match(/,/g) || []).length ? ';' : ',';
-  return text.split(/\r?\n/).map(l => l.split(delim).map(c => c.replace(/^"|"$/g, '').trim()));
+  return text.split(/\r?\n/).map(l => splitLine(l, delim));
 }
 
 function toNum(s) {
@@ -55,11 +75,17 @@ function toNum(s) {
 function parseDagrapport(csvText, fallbackDatum = null) {
   const rows = splitCsv(csvText);
 
-  // Datum: ISO, dd-mm-jjjj of d-m-jj (Lightspeed gebruikt "9-6-26")
+  // Datum: ISO, dd-mm-jjjj of d-m-jj (Lightspeed gebruikt "9-6-26"). ALLEEN uit de titelregel
+  // ("RESTAURANT SUMMARY REPORT 21-6-26") zoeken — niet uit de hele tekst: een geannuleerd
+  // ticket verderop annoteert soms "stond nog open van 20/06/2026", en die datum matchte eerder
+  // als EERSTE dmy4-treffer in het hele document (vóór de eigenlijke titel-datum in dmy2-vorm aan
+  // de beurt kwam), waardoor het rapport van 21 juni onder "20 juni" werd opgeslagen — en de
+  // eerder correct opgeslagen 20-juni-cijfers overschreef. 20 juni had toen GEEN eigen rij meer.
   let datum = fallbackDatum;
-  const iso = csvText.match(/(\d{4}-\d{2}-\d{2})/);
-  const dmy4 = csvText.match(/\b(\d{2})[-/](\d{2})[-/](\d{4})\b/);
-  const dmy2 = csvText.match(/\b(\d{1,2})-(\d{1,2})-(\d{2})\b/);
+  const titelregel = (csvText.split(/\r?\n/).find(l => l.trim()) || '') + '\n' + (csvText.split(/\r?\n/)[1] || '');
+  const iso = titelregel.match(/(\d{4}-\d{2}-\d{2})/);
+  const dmy4 = titelregel.match(/\b(\d{2})[-/](\d{2})[-/](\d{4})\b/);
+  const dmy2 = titelregel.match(/\b(\d{1,2})-(\d{1,2})-(\d{2})\b/);
   const pad = n => String(n).padStart(2, '0');
   if (iso) datum = iso[1];
   else if (dmy4) datum = `${dmy4[3]}-${dmy4[2]}-${dmy4[1]}`;
@@ -110,7 +136,10 @@ function parseDagrapport(csvText, fallbackDatum = null) {
     for (let i = hi + 1; i < rows.length; i++) {
       const r = rows[i];
       if (!r.join('').trim()) break;                                  // lege rij = einde sectie
-      const naam = (cNaam >= 0 ? r[cNaam] : '').trim();               // category-aggregaatrijen hebben lege PRODUCT-cel
+      // category-aggregaatrijen hebben lege PRODUCT-cel. Sommige productnamen staan in de bron
+      // zelf tussen letterlijke aanhalingstekens (CSV: """Caprese salade""" → na RFC4180-decode
+      // "Caprese salade") — voor matching tegen plate-namen die overtollige quotes ook strippen.
+      const naam = (cNaam >= 0 ? r[cNaam] : '').trim().replace(/^"(.*)"$/, '$1').trim();
       if (!naam) {                                                    // categorie-header
         const cat = cCat >= 0 ? (r[cCat] || '').trim() : '';
         if (cat) {
@@ -122,6 +151,11 @@ function parseDagrapport(csvText, fallbackDatum = null) {
         continue;
       }
       if (/^total$/i.test(naam) || /^discount\b/i.test(naam)) continue; // korting-/totaalregels niet als gerecht
+      // "GROUP MENU" is een POS-bundelknop (bv. een vast menu/arrangement dat meerdere gerechten
+      // achter één knop verkoopt) — telt terecht mee in keuken_omzet hierboven, maar is geen los
+      // gerecht en kan dus nooit 1-op-1 aan een plate matchen. Zonder deze uitsluiting won zo'n
+      // knop ("Menu open", 22× op een dag) altijd van echte bestsellers in de dashboard-top.
+      if (/^group\s*menu$/i.test(huidigeCat)) continue;
       gerechten.push({
         naam,
         aantal: cAantal >= 0 ? toNum(r[cAantal]) : null,
