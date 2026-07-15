@@ -64,6 +64,10 @@ async function cellTekst(cell) {
 const txt = (cells) => (cells || []).map(t => t.plain_text).join('');
 const COMMIT = flag('--commit');
 const limit = parseInt(opt('--limit', '0'), 10) || 0;
+// --only-new: promoot alleen recepten die nog GÉÉN bereiding hebben (nachtelijke scan). Leest dan
+// alleen de tabellen van de écht nieuwe pagina's in → snel, geen timeout op 600 bestaande pagina's,
+// en raakt bestaande bereidingen (incl. hun handmatige correcties) niet aan.
+const ONLY_NEW = flag('--only-new');
 
 // Haiku-fallback: als matchLokaal niets vindt, laat Haiku de regel disambigueren.
 // Aan tenzij --no-haiku of geen key. Draait in dry-run én commit (eerlijke preview).
@@ -111,7 +115,7 @@ function bepaalYield(parsed) {
 
 async function laadRecepten() {
   // 1) Verzamel alle pagina's (snel: ~1 query-call per database).
-  const pages = [];
+  let pages = [];
   for (const { id, locatie } of DB_LOCATIE) {
     let cursor, count = 0;
     do {
@@ -124,6 +128,20 @@ async function laadRecepten() {
       }
       cursor = (!limit || count < limit) && q.has_more ? q.next_cursor : undefined;
     } while (cursor);
+  }
+  // --only-new: filter de pagina's die al een bereiding hebben WEG vóór het (trage) tabellen-lezen.
+  // notion_page_id staat mét streepjes in bereiding, page.id (van Notion) ook — normaliseer beide
+  // om onzichtbare formaatverschillen uit te sluiten.
+  if (ONLY_NEW && supabase) {
+    const { data: best } = await supabase.from('bereiding').select('notion_page_id').not('notion_page_id', 'is', null);
+    const bestaand = new Set((best || []).map(b => (b.notion_page_id || '').replace(/-/g, '')));
+    const voor = pages.length;
+    // Titelloze pagina's (lege drafts/templates) kunnen nooit een bereiding worden (naam is de
+    // canonical-sleutel), dus filter ze hier weg — anders leest de nachtelijke run ze elke keer
+    // opnieuw in zonder ooit te convergeren.
+    const naamloos = pages.filter(p => !p.naam || !p.naam.trim()).length;
+    pages = pages.filter(p => p.naam && p.naam.trim() && !bestaand.has((p.page_id || '').replace(/-/g, '')));
+    console.log(`  --only-new: ${voor - pages.length} overgeslagen (waarvan ${naamloos} titelloos), ${pages.length} nieuw in te lezen`);
   }
   // 2) Tabellen PARALLEL inlezen (batches van 6). Was strikt sequentieel (1 pagina tegelijk,
   //    ~3-4 Notion-calls elk) → ~200 calls op een rij = de traagheid/timeouts. Nu: ~6 tegelijk.
@@ -211,6 +229,7 @@ async function leerAlias(ingredientId, receptNaam, index) {
 
   // canonical_id + bereiding_id per recept (alleen bij commit echte ids).
   const bereidingByPage = new Map();
+  const naamDuplicaten = [];  // recepten met een naam die al als bereiding bestaat (andere Notion-pagina)
   if (COMMIT) {
     for (const r of recepten) {
       if (!r.naam) continue;
@@ -219,6 +238,17 @@ async function leerAlias(ingredientId, receptNaam, index) {
         .upsert({ canonical_naam: canon, output_eenheid: r.output_eenheid }, { onConflict: 'canonical_naam' })
         .select('id').single();
       if (e1) { console.warn('  ⚠ canonical upsert', canon, e1.message); continue; }
+      // Naam-duplicaat-poort: er bestaat al een bereiding met deze canonical + locatie onder een
+      // ándere Notion-pagina. De upsert-op-notion_page_id zou dan een INSERT proberen en botsen op
+      // de unieke constraint (canonical_id, locatie). Dat is geen importeerbaar "nieuw" recept maar
+      // een tweede receptpagina met dezelfde naam — dat vraagt een menselijke keuze (echt duplicaat
+      // → archiveren, of vervanging → oude bereiding herbenoemen). Sla netjes over i.p.v. te crashen.
+      const { data: bestaand } = await supabase.from('bereiding')
+        .select('notion_page_id').eq('canonical_id', cb.id).eq('locatie', r.locatie).maybeSingle();
+      if (bestaand && bestaand.notion_page_id && bestaand.notion_page_id !== r.page_id) {
+        naamDuplicaten.push(r.naam);
+        continue;
+      }
       const { data: b, error: e2 } = await supabase.from('bereiding')
         .upsert({
           canonical_id: cb.id, locatie: r.locatie, notion_page_id: r.page_id,
@@ -229,6 +259,9 @@ async function leerAlias(ingredientId, receptNaam, index) {
       if (e2) { console.warn('  ⚠ bereiding upsert', canon, e2.message); continue; }
       bereidingByPage.set(r.page_id, b.id);
     }
+    if (naamDuplicaten.length) {
+      console.log(`  ⚠ ${naamDuplicaten.length} recept(en) met een naam die al als bereiding bestaat — overgeslagen (handmatig oplossen): ${naamDuplicaten.join(', ')}`);
+    }
   }
 
   // Bereiding-index voor matching: bij commit echte ids (zelfde locatie eerst),
@@ -237,6 +270,18 @@ async function leerAlias(ingredientId, receptNaam, index) {
     id: COMMIT ? bereidingByPage.get(r.page_id) : `(nieuw:${r.locatie})`,
     namen: [r.naam], locatie: r.locatie,
   }));
+  // Nesting naar een AL bestaande bereiding: een nieuw recept kan een eerder geïmporteerde
+  // sub-bereiding gebruiken (bv. "Rode mul toast" → "Garnalen farce"). Zonder de bestaande
+  // bereidingen in de index zou --only-new die nesting missen (het laadt immers alleen de nieuwe
+  // recepten) en de regel als los ingrediënt/review afdoen. Alleen bij commit (echte ids nodig).
+  if (COMMIT && supabase) {
+    const { data: best } = await supabase.from('bereiding').select('id, locatie, canonical_bereiding(canonical_naam)');
+    const alBekend = new Set(bereidingIndex.map(b => b.id));
+    for (const b of best || []) {
+      const naam = b.canonical_bereiding?.canonical_naam;
+      if (naam && !alBekend.has(b.id)) { bereidingIndex.push({ id: b.id, namen: [naam], locatie: b.locatie }); alBekend.add(b.id); }
+    }
+  }
 
   let nMatch = 0, nReview = 0, nComp = 0, nGeschat = 0, nIncompleet = 0, nHaiku = 0, nGeleerd = 0;
   if (USE_HAIKU) console.log('  (Haiku-fallback actief voor niet-lokaal herkende regels)\n');

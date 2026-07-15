@@ -231,8 +231,21 @@ async function run() {
 
 run()
   .then(() => {
-    // Na de scan: bereiding-regels automatisch oplossen (koppel-review --commit).
     const { execFileSync } = require('child_process');
+    // Nieuwe recepten promoten naar de Recept Database (bereiding). --only-new leest alleen de
+    // tabellen van recepten zónder bestaande bereiding → snel, geen timeout op 600 pagina's, en
+    // raakt bestaande bereidingen niet aan. Onzekere regels gaan naar bereiding_import_review;
+    // de koppel-review-stap hierna lost die met Haiku op (daarom hier --no-haiku: geen dubbele
+    // ronde). Niet in dry-run: dan mag niets naar Supabase geschreven worden.
+    if (!dryRun) {
+      try {
+        console.log('\n--- recepten promoten (nieuw) ---');
+        execFileSync('/usr/local/bin/node', ['import-recepten.js', '--commit', '--only-new', '--no-haiku'], { stdio: 'inherit', timeout: 600000 });
+      } catch (e) {
+        console.warn('[import-recepten] fout:', e.message);
+      }
+    }
+    // Na de scan: bereiding-regels automatisch oplossen (koppel-review --commit).
     try {
       console.log('\n--- koppel-review ---');
       // 120s was te krap geworden: bij de huidige review-achterstand (291 items, Haiku-fallback
