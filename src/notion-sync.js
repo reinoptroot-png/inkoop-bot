@@ -600,19 +600,28 @@ class NotionSync {
 
   // Intelligente AUTO-MERGE van overduidelijke dubbelen — zónder melding, gewoon
   // doen. Draait bij elke scan over het HELE assortiment (vergelijkt alle actieve
-  // ingrediënten paarsgewijs). Auto-merge vereist ALTIJD een NAAM-relatie + dezelfde
-  // leverancier — een toevallig gelijke prijs alléén voegt nooit ongerelateerde
-  // namen samen (in dit assortiment delen veel verschillende producten een prijs).
+  // ingrediënten paarsgewijs). Auto-merge vereist ALTIJD een NAAM- of ARTIKELNR-
+  // relatie + dezelfde leverancier — een toevallig gelijke prijs alléén voegt nooit
+  // ongerelateerde namen samen.
   //   A) naam fuzzy match >90% (token-Jaccard / similarity)              → merge
   //   B) generiek ⊂ specifiek: de korte naam is een betekenisvolle-token-
   //      subset van de lange én ze eindigen op hetzelfde hoofdwoord
   //      ("eieren" ⊂ "dagverse freiland eieren", "kropsla" ⊂ "kropsla bio"),
   //      bevestigd door zelfde prijs OF fuzzy >78%                        → merge
-  // aa/aaa-grades worden nooit samengevoegd. Groepen via union-find (3+ samen).
+  //   C) zelfde leverancier + zelfde ARTIKELNR (uit raw_data)             → merge
+  //      Het artikelnr is de échte identiteit bij de leverancier: als de AI-parser
+  //      de naam nét anders leest ("kers"/"kersen ontpit", "kruisbes"/"kruisbes
+  //      rood"), ontstond er een tweede rij voor hetzelfde product — de wortel
+  //      onder alle wisselende-prijs-gevallen (kruisbes had 3 prijzen, oester 2).
+  // aa/aaa-grades worden nooit samengevoegd (behalve bij zelfde artikelnr — dan
+  // is het per definitie hetzelfde product). Groepen via union-find (3+ samen).
   // Per groep: langste/meest beschrijvende naam = hoofd, de rest worden aliassen;
   // meest recente prijs blijft; prijshistorie gecombineerd; raw_data geërfd;
   // bronnen gearchiveerd; merge gelogd in de Inkoop Geschiedenis (Source-veld).
-  async autoMerge() {
+  // `supabase` (optioneel): verhuist verwijzingen (bereiding_component.ingredient_id,
+  // ingredient_concept.voorkeur_prijs_id) van bron → hoofd, zodat recepturen nooit
+  // een wees-ingrediënt overhouden wanneer de mirror de bron-rij opruimt.
+  async autoMerge(supabase = null) {
     const prices = await this.getAllPrices();
     const n = prices.length;
     const parent = prices.map((_, i) => i);
@@ -633,6 +642,8 @@ class NotionSync {
 
     const redenen = {}; // root-index → set van redenen (voor de log)
     const noteer = (i, r) => { const k = find(i); (redenen[k] = redenen[k] || new Set()).add(r); };
+    // Artikelnr uit de raw_data-tekst ("artikelnr: 60916") — de identiteit bij de leverancier.
+    const artikelnrVan = (p) => (p.rawData || '').match(/artikelnr:\s*([^\s·]+)/i)?.[1] || null;
 
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
@@ -640,6 +651,10 @@ class NotionSync {
         const levA = (a.leverancier || '').toLowerCase().trim();
         const levB = (b.leverancier || '').toLowerCase().trim();
         if (!levA || levA !== levB) continue; // zelfde leverancier vereist
+        // C) Zelfde artikelnr bij dezelfde leverancier = per definitie hetzelfde product,
+        //    ongeacht hoe de naam geparsed werd. Sterkste bewijs — gaat vóór de grade-uitsluiting.
+        const artA = artikelnrVan(a), artB = artikelnrVan(b);
+        if (artA && artA === artB) { union(i, j); noteer(i, `zelfde artikelnr ${artA}`); continue; }
         // aa vs aaa = aparte kwaliteitsklasse → nooit auto-mergen
         const gA = grade(a.name), gB = grade(b.name);
         if ((gA || gB) && gA !== gB && stripGrade(a.name) === stripGrade(b.name)) continue;
@@ -695,6 +710,16 @@ class NotionSync {
         await this.client.pages.update({ page_id: hoofd.pageId, properties: props });
         for (const b of bronnen) {
           await this.hernoemHistorie(b.name, hoofd.name);
+          // Verwijzingen in Supabase omhangen VÓÓR het archiveren: recepturen
+          // (bereiding_component) en concept-voorkeuren die naar de bron-rij wijzen
+          // gaan naar het hoofd — anders houdt de mirror-opruiming ze als wees vast
+          // (de FK blokkeert verwijderen) of verliest een recept zijn prijs.
+          if (supabase) {
+            try {
+              await supabase.from('bereiding_component').update({ ingredient_id: hoofd.pageId }).eq('ingredient_id', b.pageId);
+              await supabase.from('ingredient_concept').update({ voorkeur_prijs_id: hoofd.pageId }).eq('voorkeur_prijs_id', b.pageId);
+            } catch (e2) { console.warn(`[auto-merge] verwijzing omhangen (${b.name}): ${e2.message}`); }
+          }
           await this.client.pages.update({ page_id: b.pageId, archived: true });
         }
         const reden = [...(redenen[root] || ['dubbel'])].join(', ');
@@ -993,12 +1018,40 @@ class NotionSync {
       nameMap[e.name] = e;
       for (const alias of e.aliassen) nameMap[alias] = e;
     }
+    // Artikelnr-index: leverancier|artikelnr → bestaande rij. Het artikelnr is de échte
+    // identiteit bij de leverancier — dit voorkomt dat een nét anders geparste naam
+    // ("kers" vs "kersen ontpit", zelfde artikel 61168) een duplicaat-rij aanmaakt.
+    const artikelMap = {};
+    for (const e of existing) {
+      const art = (e.rawData || '').match(/artikelnr:\s*([^\s·]+)/i)?.[1];
+      if (art && (e.leverancier || '').trim()) artikelMap[`${e.leverancier.toLowerCase().trim()}|${art}`] = e;
+    }
 
     const toCreate = [];
     const results = { updated: 0, created: 0, aliasAdded: 0, geweerd: totaalGeweerd, dryRun };
 
     for (const item of items) {
       const naam = item.ingredient.toLowerCase().trim();
+
+      // 0. Artikelnr-match (leverancier + artikelnr = zelfde product, ongeacht de naam).
+      //    De nieuwe naam wordt alias zodat recept-matching op beide namen blijft werken.
+      const artKey = item.artikelnummer && (item.leverancier || '').trim()
+        ? `${item.leverancier.toLowerCase().trim()}|${String(item.artikelnummer).trim()}` : null;
+      const viaArtikel = artKey && artikelMap[artKey];
+      if (viaArtikel) {
+        if (dryRun) {
+          console.log(`  🔢 ARTIKEL "${naam}" → "${viaArtikel.name}" (artikelnr ${item.artikelnummer})  €${viaArtikel.price ?? '?'} → €${item.price}`);
+        } else {
+          if (naam !== viaArtikel.name && !viaArtikel.aliassen.includes(naam)) {
+            await this.addAlias(viaArtikel.pageId, viaArtikel.aliassen, naam);
+            viaArtikel.aliassen.push(naam);
+          }
+          await this.updatePriceOnly(viaArtikel.pageId, item.price, item.leverancier, viaArtikel.leverancier, bouwRawData(item));
+          nameMap[naam] = viaArtikel;
+        }
+        results.updated++;
+        continue;
+      }
 
       // 1. Exacte match (naam of alias)
       const exact = nameMap[naam];

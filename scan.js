@@ -184,6 +184,12 @@ async function run() {
   if (!dryRun && settings.supabaseUrl && settings.supabaseKey) {
     try {
       const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
+      // Dubbelen samenvoegen vóór de mirror (o.a. zelfde leverancier+artikelnr → één rij;
+      // receptuur-verwijzingen worden in Supabase omgehangen) — zie autoMerge in notion-sync.
+      try {
+        const am = await notion.autoMerge(sb);
+        if (am?.merged) console.log(`  ${am.merged} dubbel(en) automatisch samengevoegd`);
+      } catch (e) { console.warn('[auto-merge] fout:', e.message); }
       const m = await notion.mirrorNaarSupabase(sb);
       if (m?.count != null) console.log(`  ${m.count} ingrediënten gespiegeld naar Supabase inkoop_prijzen`);
     } catch (e) { console.warn('[mirror] fout:', e.message); }

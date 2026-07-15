@@ -187,7 +187,7 @@ async function run() {
     // Overduidelijke dubbelen automatisch samenvoegen (zonder melding) vóór de
     // mirror, zodat Supabase meteen het opgeschoonde assortiment krijgt.
     try {
-      const am = await notion.autoMerge();
+      const am = await notion.autoMerge(supabase);
       if (am?.merged) console.log(`[inkoop-bot] ${am.merged} dubbel(en) automatisch samengevoegd`);
     } catch (e) { console.warn('[auto-merge] fout:', e.message); }
     try {
