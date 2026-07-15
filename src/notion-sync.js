@@ -379,6 +379,27 @@ function collapseDatumVarianten(items) {
 // Bouw de volledige raw-data regel uit ALLES wat de leverancier op de factuur
 // meestuurt (alleen velden die de parser daadwerkelijk vond). Wordt naar de
 // Notion `Raw data` property geschreven bij elke scan.
+// F-02 (audit): props voor een prijs-update — de EENHEID reist altijd mee met de prijs.
+// updatePriceOnly schreef alleen Kostprijs; matchte een scanregel met een andere prijsbasis
+// ("eieren tray 30 st", €9,60) op een bestaande rij (eenheid "stuk", €0,32), dan liepen prijs
+// en eenheid stil uit de pas en rekende elk recept 30× te duur. Basis-props = velden die er
+// altijd zijn; extra = optionele velden (fallback-pad schrijft alleen de basis). Puur → getest
+// in test-import-fixes.js.
+function bouwPrijsUpdateProps({ price, eenheid = null, leverancier = '', bestaandeLeverancier = '', rawData = '', gramPerEenheid = null, vandaag = null }) {
+  const props = { 'Kostprijs': { number: price } };
+  if ((eenheid || '').trim()) props['Eenheid'] = { rich_text: [{ text: { content: String(eenheid).trim() } }] };
+  // Leverancier alleen invullen als het veld nog leeg is (bestaande waarde niet overschrijven)
+  if ((leverancier || '').trim() && !(bestaandeLeverancier || '').trim()) {
+    props['Leverancier'] = { rich_text: [{ text: { content: leverancier.trim() } }] };
+  }
+  const extra = { ...props, 'Laatste update': { date: { start: vandaag } } };
+  if (rawData) extra['Raw data'] = { rich_text: [{ text: { content: String(rawData).slice(0, 1999) } }] };
+  if (gramPerEenheid) extra['Gram per inkoopeenheid'] = { number: gramPerEenheid };
+  return { props, extra };
+}
+
+const { prijsPoortBesluit, schrijfPrijsGrootMelding } = require('./prijs-poort');
+
 function bouwRawData(item) {
   if (!item) return '';
   const v = [];
@@ -645,12 +666,30 @@ class NotionSync {
     // Artikelnr uit de raw_data-tekst ("artikelnr: 60916") — de identiteit bij de leverancier.
     const artikelnrVan = (p) => (p.rawData || '').match(/artikelnr:\s*([^\s·]+)/i)?.[1] || null;
 
+    // Nooit-samenvoegen-uitzonderingen (merge-uitzonderingen.json): paren producten die verschillend
+    // zijn maar per ongeluk hetzelfde artikelnr delen of sterk op elkaar lijken (bv. citroen melisse
+    // ≠ citroen tijm, delen Lindenhoff-artikelnr 68952 door een parse-fout). Match op betekenisvolle
+    // tokens (subset), zodat "citroen melisse" ook "citroen melisse, circa 50 gram" dekt. Gaat vóór
+    // álle merge-criteria (ook artikelnr) — anders re-merget de scan ze elke keer.
+    let nooitParen = [];
+    try {
+      const raw = require('fs').readFileSync(require('path').join(__dirname, '..', 'merge-uitzonderingen.json'), 'utf8');
+      nooitParen = (JSON.parse(raw).paren || []).map(([x, y]) => [new Set(sig(x)), new Set(sig(y))]);
+    } catch {}
+    const magNietSamen = (na, nb) => {
+      const ta = new Set(sig(na)), tb = new Set(sig(nb));
+      const bevat = (groot, klein) => klein.size > 0 && [...klein].every(t => groot.has(t));
+      return nooitParen.some(([p, q]) => (bevat(ta, p) && bevat(tb, q)) || (bevat(ta, q) && bevat(tb, p)));
+    };
+
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const a = prices[i], b = prices[j];
         const levA = (a.leverancier || '').toLowerCase().trim();
         const levB = (b.leverancier || '').toLowerCase().trim();
         if (!levA || levA !== levB) continue; // zelfde leverancier vereist
+        // Nooit-samenvoegen-uitzondering: gaat vóór alle criteria (ook artikelnr).
+        if (magNietSamen(a.name, b.name)) continue;
         // C) Zelfde artikelnr bij dezelfde leverancier = per definitie hetzelfde product,
         //    ongeacht hoe de naam geparsed werd. Sterkste bewijs — gaat vóór de grade-uitsluiting.
         const artA = artikelnrVan(a), artB = artikelnrVan(b);
@@ -916,22 +955,14 @@ class NotionSync {
     }
   }
 
-  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '', gramPerEenheid = null) {
+  async updatePriceOnly(pageId, price, leverancier, bestaandeLeverancier = '', rawData = '', gramPerEenheid = null, eenheid = null) {
     const today = new Date().toISOString().split('T')[0];
-    const props = {
-      'Kostprijs': { number: price },
-    };
-    // Leverancier alleen invullen als het veld nog leeg is (bestaande waarde niet overschrijven)
-    if ((leverancier || '').trim() && !(bestaandeLeverancier || '').trim()) {
-      props['Leverancier'] = { rich_text: [{ text: { content: leverancier.trim() } }] };
-    }
-    // Probeer 'Laatste update' + 'Raw data' te zetten (velden hoeven niet te bestaan)
-    const extra = { ...props, 'Laatste update': { date: { start: today } } };
-    if (rawData) extra['Raw data'] = { rich_text: [{ text: { content: rawData.slice(0, 1999) } }] };
-    if (gramPerEenheid) extra['Gram per inkoopeenheid'] = { number: gramPerEenheid };
+    // F-02: eenheid schrijft altijd mee met de prijs (zie bouwPrijsUpdateProps hierboven).
+    const { props, extra } = bouwPrijsUpdateProps({ price, eenheid, leverancier, bestaandeLeverancier, rawData, gramPerEenheid, vandaag: today });
     try {
       await this.client.pages.update({ page_id: pageId, properties: extra });
     } catch {
+      // Fallback zonder optionele velden (Laatste update/Raw data/Gram per inkoopeenheid).
       await this.client.pages.update({ page_id: pageId, properties: props });
     }
   }
@@ -996,7 +1027,8 @@ class NotionSync {
     }
   }
 
-  async syncAll(items, { dryRun = false, learnedBlacklist = [] } = {}) {
+  async syncAll(items, opts = {}) {
+    const { dryRun = false, learnedBlacklist = [] } = opts;
     if (dryRun) console.log('\n⚙️  DRY-RUN — geen schrijfacties naar Notion\n');
 
     // Weer HSN-leverancier, non-food en de lerende blacklist vóór verwerking
@@ -1028,7 +1060,27 @@ class NotionSync {
     }
 
     const toCreate = [];
-    const results = { updated: 0, created: 0, aliasAdded: 0, geweerd: totaalGeweerd, dryRun };
+    const results = { updated: 0, created: 0, aliasAdded: 0, geweerd: totaalGeweerd, poort: 0, dryRun };
+
+    // F-03: zelfde ≥drempel%-prijspoort als headless.js — een grote sprong wordt een pending
+    // prijs_groot-melding en GEEN directe write. poortCfg = { drempelPct, supabase } komt uit
+    // scan.js; zonder cfg (bv. oude aanroepers) gedraagt syncAll zich als voorheen.
+    const poortCfg = opts && opts.prijsPoort ? opts.prijsPoort : null;
+    const houdtPoortTegen = async (bestaand, item) => {
+      if (!poortCfg || bestaand.price == null) return false;
+      const poort = prijsPoortBesluit({ oudePrijs: bestaand.price, nieuwePrijs: item.price, drempelPct: poortCfg.drempelPct });
+      if (poort.besluit !== 'poort') return false;
+      console.log(`  ⚠ GROOT   "${bestaand.name}" €${bestaand.price} → €${item.price} (${poort.pct.toFixed(1)}%) — wacht op bevestiging${dryRun ? ' [dry-run]' : ''}`);
+      if (!dryRun) {
+        await schrijfPrijsGrootMelding(poortCfg.supabase, {
+          ingredient_naam: bestaand.name, leverancier: item.leverancier || '',
+          prijs_oud: bestaand.price, prijs_nieuw: item.price,
+          wijziging_pct: parseFloat(poort.pct.toFixed(2)), bestaand_page_id: bestaand.pageId,
+        });
+      }
+      results.poort++;
+      return true;
+    };
 
     for (const item of items) {
       const naam = item.ingredient.toLowerCase().trim();
@@ -1039,6 +1091,7 @@ class NotionSync {
         ? `${item.leverancier.toLowerCase().trim()}|${String(item.artikelnummer).trim()}` : null;
       const viaArtikel = artKey && artikelMap[artKey];
       if (viaArtikel) {
+        if (await houdtPoortTegen(viaArtikel, item)) continue;   // F-03
         if (dryRun) {
           console.log(`  🔢 ARTIKEL "${naam}" → "${viaArtikel.name}" (artikelnr ${item.artikelnummer})  €${viaArtikel.price ?? '?'} → €${item.price}`);
         } else {
@@ -1046,7 +1099,7 @@ class NotionSync {
             await this.addAlias(viaArtikel.pageId, viaArtikel.aliassen, naam);
             viaArtikel.aliassen.push(naam);
           }
-          await this.updatePriceOnly(viaArtikel.pageId, item.price, item.leverancier, viaArtikel.leverancier, bouwRawData(item));
+          await this.updatePriceOnly(viaArtikel.pageId, item.price, item.leverancier, viaArtikel.leverancier, bouwRawData(item), item.gram_per_inkoopeenheid || null, item.eenheid || null);
           nameMap[naam] = viaArtikel;
         }
         results.updated++;
@@ -1056,10 +1109,11 @@ class NotionSync {
       // 1. Exacte match (naam of alias)
       const exact = nameMap[naam];
       if (exact) {
+        if (await houdtPoortTegen(exact, item)) continue;   // F-03
         if (dryRun) {
           console.log(`  ✏️  UPDATE  "${naam}"  was €${exact.price ?? '?'} → €${item.price}  (${item.leverancier})`);
         } else {
-          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier, exact.leverancier, bouwRawData(item));
+          await this.updatePriceOnly(exact.pageId, item.price, item.leverancier, exact.leverancier, bouwRawData(item), item.gram_per_inkoopeenheid || null, item.eenheid || null);
         }
         results.updated++;
         continue;
@@ -1083,12 +1137,13 @@ class NotionSync {
       // 3. Fuzzy match (>80%) — alias + prijs bijwerken
       const fuzzy = findFuzzyMatch(naam, existing);
       if (fuzzy) {
+        if (await houdtPoortTegen(fuzzy.match, item)) continue;   // F-03
         const pct = Math.round(fuzzy.score * 100);
         if (dryRun) {
           console.log(`  🔗 ALIAS   "${naam}" → "${fuzzy.match.name}" (${pct}% match) — alias toegevoegd, prijs bijgewerkt`);
         } else {
           await this.addAlias(fuzzy.match.pageId, fuzzy.match.aliassen, naam);
-          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier, fuzzy.match.leverancier, bouwRawData(item));
+          await this.updatePriceOnly(fuzzy.match.pageId, item.price, item.leverancier, fuzzy.match.leverancier, bouwRawData(item), item.gram_per_inkoopeenheid || null, item.eenheid || null);
           nameMap[naam] = fuzzy.match;
         }
         results.aliasAdded++;
@@ -1148,6 +1203,7 @@ module.exports.NON_FOOD_BLACKLIST = NON_FOOD_BLACKLIST;
 module.exports.isDrank = isDrank;
 module.exports.DRANK_BLACKLIST = DRANK_BLACKLIST;
 module.exports.stripDatum = stripDatum;
+module.exports.bouwPrijsUpdateProps = bouwPrijsUpdateProps;
 module.exports.parseDatumUitNaam = parseDatumUitNaam;
 module.exports.collapseDatumVarianten = collapseDatumVarianten;
 module.exports.bouwRawData = bouwRawData;

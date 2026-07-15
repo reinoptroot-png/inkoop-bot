@@ -6,6 +6,7 @@
  */
 require('dotenv').config();
 
+const { prijsPoortBesluit } = require('./prijs-poort');
 const ImapScanner = require('./imap-scanner');
 const NotionSync  = require('./notion-sync');
 
@@ -255,10 +256,13 @@ async function run() {
     const existing = naamMap[naam];
 
     if (existing) {
-      const diff = existing.price ? ((item.price - existing.price) / existing.price) * 100 : 0;
-      const pctAbs = Math.abs(diff);
+      // F-03: besluit via de gedeelde poortfunctie (src/prijs-poort.js) — één regel voor
+      // beide paden (headless én scan.js/syncAll). Gedrag ongewijzigd, incl. F-15-pariteit
+      // (geen oude prijs ⇒ geen poort).
+      const poort = prijsPoortBesluit({ oudePrijs: existing.price, nieuwePrijs: item.price, drempelPct: settings.alertThreshold });
+      const diff = poort.pct ?? 0;
 
-      if (pctAbs >= settings.alertThreshold) {
+      if (poort.besluit === 'poort') {
         // Grote wijziging: Notion update uitstellen — gebruiker moet accepteren
         alerts.push({ ingredient: item.ingredient, oldPrice: existing.price, newPrice: item.price, diff: diff.toFixed(1) });
         await schrijfMelding({
@@ -275,7 +279,7 @@ async function run() {
         console.log(`  ⚠ GROOT: "${naam}" €${existing.price} → €${item.price} (${diff.toFixed(1)}%) — wacht op bevestiging`);
       } else {
         // Kleine wijziging: meteen bijwerken
-        await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier, existing.leverancier, NotionSync.bouwRawData(item), item.gram_per_inkoopeenheid || null);
+        await notion.updatePriceOnly(existing.pageId, item.price, item.leverancier, existing.leverancier, NotionSync.bouwRawData(item), item.gram_per_inkoopeenheid || null, item.eenheid || null);
         // Koppeling: de bot herkent voor het eerst een HANDMATIG ingevoerd product
         // (had nog geen bot-rawdata) → "koppeling gemaakt" melding (groen).
         if (!(existing.rawData && existing.rawData.trim())) {
@@ -323,7 +327,7 @@ async function run() {
         const target = naamMap[match.canonical] || notionPrices.find(p => p.pageId === match.pageId);
         if (target) {
           await notion.addAlias(target.pageId, target.aliassen || [], naam);
-          await notion.updatePriceOnly(target.pageId, item.price, item.leverancier, target.leverancier, NotionSync.bouwRawData(item), item.gram_per_inkoopeenheid || null);
+          await notion.updatePriceOnly(target.pageId, item.price, item.leverancier, target.leverancier, NotionSync.bouwRawData(item), item.gram_per_inkoopeenheid || null, item.eenheid || null);
           naamMap[naam] = target;
           await logConfidence({ scan_naam: naam, canonical: match.canonical, leverancier: item.leverancier, confidence: match.confidence, haiku_uitleg: match.uitleg });
           console.log(`  🤖 AUTO-KOPPEL (${match.confidence}%): "${naam}" → canonical "${match.canonical}" — ${match.uitleg}`);

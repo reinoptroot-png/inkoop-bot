@@ -5,7 +5,8 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "scan": "node src/headless.js"
+    "scan": "node src/headless.js",
+    "test": "node test-bereiding-match.js && node test-recept-import-lib.js && node test-recept-parse.js && node test-import-fixes.js"
   },
   "dependencies": {
     "@notionhq/client": "^2.2.15",

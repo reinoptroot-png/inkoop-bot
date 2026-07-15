@@ -4,6 +4,7 @@ const pdfParse = require('pdf-parse');
 const fetch = require('node-fetch');
 const { createClient } = require('@supabase/supabase-js');
 const { isLightspeedDagrapport, extractCsvLink, parseDagrapport } = require('./lightspeed');
+const { verwerkClaudeTekst } = require('./factuur-parse');
 
 // ── Dedup op verwerkte e-mails (Supabase) ─────────────────────────────────────
 // Vervangt het broze "alleen UNSEEN"-mechanisme: we onthouden welke mails al
@@ -277,13 +278,15 @@ class ImapScanner {
       text = data.text;
       log(`[pdf] Tekst geëxtraheerd: ${text.trim().length} tekens, ${data.numpages} pagina('s)`);
     } catch (e) {
+      // F-01: retrybaar (ok:false) — een kapotte read kan aan ons liggen; markeer de mail niet.
       log(`[pdf] pdf-parse mislukt: ${e.message}`);
-      return [];
+      return { ok: false, items: [] };
     }
 
     if (!text || text.trim().length < 50) {
+      // Deterministisch leeg (scan-/beeld-PDF): een nieuwe run geeft hetzelfde ⇒ geslaagd, 0 items.
       log(`[pdf] Overgeslagen — te weinig tekst (${text.trim().length} tekens)`);
-      return [];
+      return { ok: true, items: [] };
     }
 
     const prompt = `Je bent een assistent die leveranciersfacturen analyseert voor een restaurant.
@@ -304,7 +307,7 @@ Retourneer ALLEEN een JSON array, geen uitleg, geen markdown backticks. Formaat:
 
 Regels:
 - "ingredient": de productnaam, zo duidelijk mogelijk, in het Nederlands of originele taal
-- "price": de prijs per eenheid (per kg, per liter, per stuk), als getal
+- "price": de prijs per eenheid (per kg, per liter, per stuk), als getal, ALTIJD EXCL. BTW (netto). Toont de factuur alleen bruto regelprijzen (incl. btw), reken terug naar excl. (voedsel 9%, non-food 21%); kan dat niet betrouwbaar, sla het product dan over.
 - "eenheid": de eenheid (kg, liter, stuk, etc.)
 - Als de prijs per doos/krat is, bereken dan de prijs per kg/stuk als dat mogelijk is
 - "regelbedrag": het TOTALE bedrag van die factuurregel zoals op de factuur staat (aantal × stukprijs, excl. btw indien de factuur netto regelbedragen toont), als getal. Null als je het niet kunt bepalen.
@@ -334,42 +337,25 @@ ${text.substring(0, 24000)}`;
 
       const data = await response.json();
       if (data.error) {
+        // F-01: API-storing is retrybaar — mail NIET markeren, volgende run opnieuw.
         log(`[pdf] Claude API fout: ${data.error.message}`);
-        return [];
+        return { ok: false, items: [] };
       }
-      const raw = data.content?.[0]?.text || '';
-      const clean = raw.replace(/```json|```/g, '').trim();
-      let items;
-      try {
-        items = JSON.parse(clean);
-      } catch (parseErr) {
-        console.error(`[pdf] JSON parse mislukt voor "${filename}": ${parseErr.message}`);
-        console.error(`[pdf] Claude response was: ${clean.substring(0, 200)}`);
-        return [];
+      // F-01: fout ≠ leeg — afgekapte JSON of niet-array is ok:false (retry), een geldige
+      // lege lijst is ok:true. Pure verwerking + validatie in src/factuur-parse.js (getest).
+      const parse = verwerkClaudeTekst(data.content?.[0]?.text || '');
+      if (!parse.ok) {
+        console.error(`[pdf] ${parse.fout} voor "${filename}" — mail blijft retrybaar`);
+        return parse;
       }
-      if (!Array.isArray(items)) {
-        console.error(`[pdf] Claude gaf geen array terug voor "${filename}": ${typeof items}`);
-        return [];
+      if (parse.overgeslagen > 0) {
+        console.warn(`[pdf] ${parse.overgeslagen} items overgeslagen wegens ontbrekende velden in "${filename}"`);
       }
-      const valid = items.filter(item => {
-        if (!item.ingredient || typeof item.ingredient !== 'string') {
-          console.warn(`[pdf] Item zonder ingredient naam overgeslagen:`, JSON.stringify(item));
-          return false;
-        }
-        if (item.price == null || typeof item.price !== 'number' || isNaN(item.price)) {
-          console.warn(`[pdf] "${item.ingredient}" overgeslagen — ongeldige prijs:`, item.price);
-          return false;
-        }
-        return true;
-      });
-      if (valid.length < items.length) {
-        console.warn(`[pdf] ${items.length - valid.length} items overgeslagen wegens ontbrekende velden in "${filename}"`);
-      }
-      log(`[pdf] Claude extraheerde ${valid.length} geldige producten uit "${filename}" (${items.length} totaal)`);
-      return valid;
+      log(`[pdf] Claude extraheerde ${parse.items.length} geldige producten uit "${filename}"`);
+      return parse;
     } catch (e) {
       console.error(`[pdf] Claude parse error (${filename}):`, e.message);
-      return [];
+      return { ok: false, items: [] };
     }
   }
 
@@ -431,13 +417,16 @@ ${text.substring(0, 24000)}`;
       }
       log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier}"`);
       let emailProducten = 0;
+      let emailFout = false;   // F-01: één mislukte bijlage-parse houdt de mail retrybaar
       for (const att of email.attachments) {
         if (!att.contentType || !att.contentType.includes('pdf')) {
           log(`[scan] Bijlage overgeslagen — geen PDF (${att.contentType || 'onbekend type'}): "${att.filename}"`);
           continue;
         }
-        const items = await this.parsePdfWithClaude(att.content, att.filename, debug);
-        log(`[scan] "${att.filename}" → ${items.length} producten gevonden`);
+        const parse = await this.parsePdfWithClaude(att.content, att.filename, debug);
+        if (!parse.ok) emailFout = true;   // F-01: mislukte parse ⇒ mail niet markeren (retry)
+        const items = parse.items;
+        log(`[scan] "${att.filename}" → ${items.length} producten gevonden${parse.ok ? '' : ' (PARSE-FOUT — retry volgende run)'}`);
         emailProducten += items.length;
         allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '', leverancier_email: senderAddress })));
         // Factuurregels apart bewaren (vóór dedup) voor de factuurtotalen
@@ -447,7 +436,13 @@ ${text.substring(0, 24000)}`;
         });
       }
       // Mail als verwerkt vastleggen — volgende run slaat 'm over (geen dubbele Claude-calls).
-      if (!reprocess) await markEmailVerwerkt(this.settings, eKey, { leverancier, onderwerp: subject, email_datum: ymdDate(email.date), producten: emailProducten });
+      // F-01: ALLEEN bij een geslaagde parse van alle PDF-bijlagen. Vroeger werd hier altijd
+      // gemarkeerd, ook als Claude een storing had — die factuur was dan voorgoed kwijt.
+      if (emailFout) {
+        console.warn(`[scan] "${subject}" (${leverancier}) NÍET als verwerkt gemarkeerd — parse-fout, volgende run opnieuw`);
+      } else if (!reprocess) {
+        await markEmailVerwerkt(this.settings, eKey, { leverancier, onderwerp: subject, email_datum: ymdDate(email.date), producten: emailProducten });
+      }
     }
 
     log(`[scan] Totaal voor deduplicatie: ${allItems.length} items`);

@@ -175,7 +175,11 @@ async function run() {
 
     const learnedBlacklist = await loadLearnedBlacklist(settings);
     if (learnedBlacklist.length) console.log('Lerende blacklist:', learnedBlacklist.length, 'namen geladen');
-    result = await notion.syncAll(items, { dryRun, learnedBlacklist });
+    // F-03: zelfde prijspoort als headless — drempel uit settings (ALERT_THRESHOLD, default 10),
+    // meldingen naar scan_meldingen (zonder Supabase alleen het poort-besluit, geen melding).
+    const poortSb = (settings.supabaseUrl && settings.supabaseKey) ? createClient(settings.supabaseUrl, settings.supabaseKey) : null;
+    result = await notion.syncAll(items, { dryRun, learnedBlacklist, prijsPoort: { drempelPct: settings.alertThreshold, supabase: poortSb } });
+    if (result.poort) console.log(`Prijspoort: ${result.poort} grote prijssprong(en) wachten op bevestiging (scan_meldingen)`);
   }
 
   // Notion → Supabase mirror (alle ingrediënten naar inkoop_prijzen).
