@@ -356,12 +356,16 @@ async function checkVolledigheid(laatsteScan, samenvatting) {
   // Venster = kijkvensterDagen; idempotent per email_key. Domein 'parseerkwaliteit' wordt als
   // geslaagd gemarkeerd zodat een gat vanzelf sluit zodra de mail bij herverwerking wél producten geeft.
   const parseVenster = new Date(NU - CFG.kijkvensterDagen * 86400000);
+  // Documenttypen die van nature 0 producten hebben — géén mislukte parse, dus niet flaggen:
+  // Lightspeed-omzetrapporten en Sligro-logistiek (emballagebon, leverings-/orderinformatie,
+  // order/ontvangstbevestiging). Alleen échte pakbonnen/facturen die 0 opleveren zijn verdacht.
+  const GEEN_PRODUCT_VERWACHT = /day report|dagrapport|embal|emballage|leveringsinformatie|orderinformatie|order ?ontvangst|ontvangstbevestiging|orderbevestiging/i;
   const nulProduct = (verwRows || []).filter(r =>
     Number(r.producten) === 0 &&
     r.verwerkt_op && new Date(r.verwerkt_op) >= parseVenster &&
     (r.onderwerp || '').trim() &&
     !/lightspeed/i.test(r.leverancier || '') &&
-    !/day report|dagrapport/i.test(r.onderwerp || ''));
+    !GEEN_PRODUCT_VERWACHT.test(r.onderwerp || ''));
   samenvatting.docs_zonder_producten = nulProduct.length;
   geslaagdeDomeinen.add('parseerkwaliteit');
   for (const r of nulProduct) {
