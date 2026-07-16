@@ -187,19 +187,25 @@ function checkMachine(state, samenvatting) {
     samenvatting.klokdrift_sec = 'onbekend — sntp gaf geen offset terug';
   }
 
-  // Schijfruimte.
-  const df = cmd('/bin/df', ['-k', '/']);
-  const pct = df && df.match(/(\d+)%\s+\/\n?$/m);
+  // Schijfruimte. `df -P` (POSIX) geeft één dataregel met de "Capacity" als enige percentage.
+  // Het gewone `df -k /` op macOS zet de mount-`/` juist achter extra kolommen (iused, %iused),
+  // waardoor de oude regex `NN% /` nooit matchte en schijf_gebruikt_pct stil op 0 bleef —
+  // het schijf-vol-alarm zou dan dus nooit afgaan.
+  const df = cmd('/bin/df', ['-Pk', '/']);
+  const dataregel = df ? df.trim().split('\n').pop() : null;
+  const pct = dataregel && dataregel.match(/(\d+)%/);
   if (pct) {
     samenvatting.schijf_gebruikt_pct = parseInt(pct[1], 10);
     if (parseInt(pct[1], 10) > 90) {
       gap({
         sleutel: 'machine|schijf', type: 'connectiviteit', ernst: 'midden', domein: 'machine',
-        bron: `df -k / op ${os.hostname()}`, bewijs: `df: ${pct[1]}% in gebruik`,
+        bron: `df -Pk / op ${os.hostname()}`, bewijs: `df: ${pct[1]}% in gebruik`,
         details: `Schijf ${pct[1]}% vol — PDF-verwerking en logs kunnen gaan falen.`,
         actie: 'Ruim schijfruimte op de scan-machine op.',
       });
     }
+  } else {
+    samenvatting.schijf_gebruikt_pct = 'onbekend — df gaf geen percentage terug';
   }
 
   // Keychain/OAuth: deze pijplijn gebruikt géén Keychain — alle credentials staan in .env
@@ -342,6 +348,31 @@ async function checkVolledigheid(laatsteScan, samenvatting) {
   const ledger = new Set((verwRows || []).map(r => r.email_key));
   samenvatting.whitelist_afzenders = Object.keys(whitelist).length;
   samenvatting.ledger_mails = ledger.size;
+
+  // §3 Parseerkwaliteit — een verwerkte pakbon/factuur die 0 producten opleverde is een
+  // kandidaat-miss (mislukte parse of niet-herkend documentformaat), precies het soort gat dat
+  // "mail staat in ledger = ok" niet zag. Lightspeed-dagrapporten leveren bewust 0 producten
+  // (omzetrapporten, geen inkoop) en tellen niet mee; artefact-mails zonder onderwerp ook niet.
+  // Venster = kijkvensterDagen; idempotent per email_key. Domein 'parseerkwaliteit' wordt als
+  // geslaagd gemarkeerd zodat een gat vanzelf sluit zodra de mail bij herverwerking wél producten geeft.
+  const parseVenster = new Date(NU - CFG.kijkvensterDagen * 86400000);
+  const nulProduct = (verwRows || []).filter(r =>
+    Number(r.producten) === 0 &&
+    r.verwerkt_op && new Date(r.verwerkt_op) >= parseVenster &&
+    (r.onderwerp || '').trim() &&
+    !/lightspeed/i.test(r.leverancier || '') &&
+    !/day report|dagrapport/i.test(r.onderwerp || ''));
+  samenvatting.docs_zonder_producten = nulProduct.length;
+  geslaagdeDomeinen.add('parseerkwaliteit');
+  for (const r of nulProduct) {
+    gap({
+      sleutel: `parse0|${r.email_key}`, type: 'parse_mislukt', ernst: 'laag', domein: 'parseerkwaliteit',
+      bron: `verwerkte_emails: ${r.email_key}`,
+      bewijs: `producten=0 · verwerkt ${r.verwerkt_op}`,
+      details: `"${(r.onderwerp || '').slice(0, 70)}"${r.leverancier ? ` (${r.leverancier})` : ''} leverde 0 producten op — mogelijk mislukte parse of niet-herkend documentformaat.`,
+      actie: 'Controleer de PDF; herverwerk (--reprocess) of voer handmatig in als er wél producten in staan.',
+    });
+  }
 
   const magOordelen = !!laatsteScan; // zonder laatste_scan-tijd is "gemist vs. wacht op scan" niet te onderscheiden
   const oordeelGrens = laatsteScan ? new Date(laatsteScan.getTime() - CFG.graceUren * 3600000) : null;
