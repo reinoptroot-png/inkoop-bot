@@ -115,4 +115,41 @@ function ok(naam) { n++; console.log('  ✓', naam); }
   ok('[trust-all] pakbon@europa.rest slaat whitelist over; overige mailboxen niet');
 }
 
+// ── [F-08] Dedup: laatste factuurprijs wint — geen gemiddelde ───────────────────
+// Bindend besluit 16 juli 2026. Vroeger middelde de dedup (prijs = lopend gemiddelde) én voegde
+// leveranciers samen; nu wint de regel met de recentste factuurdatum, zonder datum de laatste.
+{
+  const { dedupLaatstePrijs } = require('./src/imap-scanner');
+
+  // Zelfde ingrediënt, twee facturen: de recentste datum wint (geen gemiddelde van 2,10 en 2,80).
+  const r1 = dedupLaatstePrijs([
+    { ingredient: 'Tomaat', price: 2.10, factuurdatum: '2026-06-01', leverancier: 'A' },
+    { ingredient: 'tomaat', price: 2.80, factuurdatum: '2026-07-14', leverancier: 'B' },
+  ]);
+  assert.strictEqual(r1.length, 1, 'één unieke tomaat');
+  assert.strictEqual(r1[0].price, 2.80, 'F-08: recentste factuurdatum wint, geen gemiddelde');
+  assert.strictEqual(r1[0].leverancier, 'B', 'leverancier van de winnende regel, niet samengevoegd');
+
+  // Oudere datum als tweede binnengekomen mag de recentste NIET overschrijven.
+  const r2 = dedupLaatstePrijs([
+    { ingredient: 'ui', price: 4.50, factuurdatum: '2026-07-14' },
+    { ingredient: 'ui', price: 9.99, factuurdatum: '2026-06-01' },
+  ]);
+  assert.strictEqual(r2[0].price, 4.50, 'F-08: oudere factuur overschrijft de recentste niet');
+
+  // Zonder datum: de later-verwerkte vermelding wint (deterministische fallback).
+  const r3 = dedupLaatstePrijs([
+    { ingredient: 'zout', price: 1.00 },
+    { ingredient: 'zout', price: 1.20 },
+  ]);
+  assert.strictEqual(r3[0].price, 1.20, 'F-08: zonder datum wint de laatste vermelding');
+
+  // Verschillende ingrediënten blijven allebei staan; lege naam valt weg.
+  const r4 = dedupLaatstePrijs([
+    { ingredient: 'appel', price: 1 }, { ingredient: 'peer', price: 2 }, { ingredient: '', price: 9 },
+  ]);
+  assert.strictEqual(r4.length, 2, 'twee echte ingrediënten, lege naam genegeerd');
+  ok('[F-08] dedupLaatstePrijs: laatste factuurprijs wint, geen middeling/leverancier-merge');
+}
+
 console.log(`\n${n} tests geslaagd ✅`);

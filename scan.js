@@ -87,7 +87,7 @@ async function run() {
     return { items: [], scanner: null };
   };
 
-  const scanOpts = { markSeen: !dryRun, reprocess, lookbackDays: 30 };
+  const scanOpts = { markSeen: !dryRun, dryRun, reprocess, lookbackDays: 30 };
 
   const { items: items1, scanner: scanner1 } = await scanMailbox(1, settings.imapUser, settings.imapPass, settings.imapHost, scanOpts);
   const { items: items2, scanner: scanner2 } = settings.imapUser2
@@ -109,8 +109,9 @@ async function run() {
     if (n) console.log(`Nieuwe leverancier-meldingen aangemaakt: ${n}`);
   }
 
-  // Tijdstip van deze scan vastleggen (ook zonder nieuwe emails) → Dashboard "Laatste scan"
-  if (settings.supabaseUrl && settings.supabaseKey) {
+  // Tijdstip van deze scan vastleggen (ook zonder nieuwe emails) → Dashboard "Laatste scan".
+  // Niet in dry-run: anders lijkt op het dashboard een echte scan gedraaid te hebben.
+  if (!dryRun && settings.supabaseUrl && settings.supabaseKey) {
     const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
     const nu = new Date().toISOString();
     const { error } = await sb.from('instellingen').upsert(
@@ -121,7 +122,7 @@ async function run() {
 
   // Lightspeed dagrapporten → Supabase (ook als er geen facturen zijn)
   const dagrapporten = allesScanners.flatMap(s => s.dagrapporten || []);
-  if (dagrapporten.length && settings.supabaseUrl && settings.supabaseKey) {
+  if (!dryRun && dagrapporten.length && settings.supabaseUrl && settings.supabaseKey) {
     const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
     for (const dr of dagrapporten) {
       if (!dr.datum) { console.warn('[dagrapport] geen datum — overgeslagen'); continue; }
@@ -138,28 +139,15 @@ async function run() {
   // headless.js schreef dit al; het launchd-pad via scan.js nog niet — het dashboard
   // leest hieruit de inkoop-per-dag. Upsert op factuurnr voorkomt dubbels.
   const facturen = allesScanners.flatMap(s => s.facturen || []);
-  if (facturen.length && settings.supabaseUrl && settings.supabaseKey) {
+  if (!dryRun && facturen.length && settings.supabaseUrl && settings.supabaseKey) {
     const sb = createClient(settings.supabaseUrl, settings.supabaseKey);
     const { error } = await sb.from('inkoop_facturen').upsert(facturen, { onConflict: 'factuurnr' });
     console.log(error ? `[facturen] schrijffout: ${error.message}` : `${facturen.length} factuurtotaal(en) → inkoop_facturen`);
   }
 
-  // Dedupliceer over alle mailboxen
-  const map = {};
-  for (const item of [...items1, ...items2, ...items3, ...items4]) {
-    const key = item.ingredient.toLowerCase().trim();
-    if (!map[key]) {
-      map[key] = { ...item, ingredient: key, count: 1 };
-    } else {
-      map[key].price = (map[key].price * map[key].count + item.price) / (map[key].count + 1);
-      map[key].count++;
-      if (item.leverancier && !(map[key].leverancier || '').includes(item.leverancier)) {
-        map[key].leverancier = (map[key].leverancier ? map[key].leverancier + ', ' : '') + item.leverancier;
-      }
-    }
-  }
-
-  const items = Object.values(map);
+  // Dedup over alle mailboxen: laatste factuurprijs wint (F-08) — gedeelde pure functie,
+  // geen middeling en geen leverancier-samenvoeging meer (dat brak de artikelnr-index).
+  const items = ImapScanner.dedupLaatstePrijs([...items1, ...items2, ...items3, ...items4]);
   console.log('Gescand: ' + items.length + ' producten uit facturen');
 
   const notion = new NotionSync(settings);

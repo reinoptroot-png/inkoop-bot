@@ -90,6 +90,24 @@ function isTrustAllMailbox(imapUser, env) {
   return trustAllMailboxen(env).includes(String(imapUser || '').toLowerCase());
 }
 
+// F-08 (bindend besluit 16 juli 2026): dedup op ingredientnaam waarbij de LAATSTE (meest recente)
+// factuurprijs wint — nooit een gemiddelde. Vergelijk op factuurdatum (ISO YYYY-MM-DD, lexicografisch
+// = chronologisch); zonder bruikbare datum wint de later-verwerkte vermelding. Nooit leveranciers
+// samenvoegen (dat brak de artikelnr-index). Puur → testbaar (test-import-fixes.js). Gedeeld door
+// de per-mailbox-dedup (scan hieronder) én de cross-mailbox-dedup in scan.js.
+function dedupLaatstePrijs(items) {
+  const map = {};
+  for (const item of items || []) {
+    const key = (item.ingredient || '').toLowerCase().trim();
+    if (!key) continue;
+    const bestaand = map[key];
+    if (!bestaand || (item.factuurdatum || '') >= (bestaand.factuurdatum || '')) {
+      map[key] = { ...item, ingredient: key };
+    }
+  }
+  return Object.values(map);
+}
+
 // ── Detectie van nieuwe FOOD-leveranciers ────────────────────────────────────
 const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
 const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
@@ -370,7 +388,7 @@ ${text.substring(0, 24000)}`;
     }
   }
 
-  async scan({ markSeen = false, lookbackDays = 45, reprocess = false, debug = false } = {}) {
+  async scan({ markSeen = false, lookbackDays = 45, reprocess = false, debug = false, dryRun = false } = {}) {
     const log = debug ? (...a) => console.log(...a) : () => {};
     const knownSenders = await loadKnownSenders(this.settings);
     log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
@@ -408,7 +426,7 @@ ${text.substring(0, 24000)}`;
             const dr = parseDagrapport(csvText);
             dagrapporten.push(dr);
             log(`[scan] Lightspeed dagrapport: ${dr.datum || '?'} — omzet ${dr.totale_omzet ?? '?'}, ${dr.gerechten.length} gerechten`);
-            if (!reprocess) await markEmailVerwerkt(this.settings, eKey, { leverancier: 'lightspeed', onderwerp: subject, email_datum: ymdDate(email.date) });
+            if (!reprocess && !dryRun) await markEmailVerwerkt(this.settings, eKey, { leverancier: 'lightspeed', onderwerp: subject, email_datum: ymdDate(email.date) });
           } catch (e) { log(`[scan] dagrapport download/parse-fout: ${e.message}`); }
         } else {
           log(`[scan] Lightspeed-mail zonder CSV-link: "${subject}"`);
@@ -460,28 +478,18 @@ ${text.substring(0, 24000)}`;
       // gemarkeerd, ook als Claude een storing had — die factuur was dan voorgoed kwijt.
       if (emailFout) {
         console.warn(`[scan] "${subject}" (${leverancier}) NÍET als verwerkt gemarkeerd — parse-fout, volgende run opnieuw`);
-      } else if (!reprocess) {
+      } else if (!reprocess && !dryRun) {
+        // dryRun mag NIETS naar het ledger schrijven — anders markeert een dry-run de mails als
+        // verwerkt en slaat de échte run ze over (waardoor de pakbonnen stil niet ingelezen werden).
         await markEmailVerwerkt(this.settings, eKey, { leverancier, onderwerp: subject, email_datum: ymdDate(email.date), producten: emailProducten });
       }
     }
 
     log(`[scan] Totaal voor deduplicatie: ${allItems.length} items`);
 
-    // Dedupliceer op ingredient naam (neem gemiddelde als dubbel)
-    const map = {};
-    for (const item of allItems) {
-      const key = item.ingredient.toLowerCase().trim();
-      if (!map[key]) {
-        map[key] = { ...item, count: 1 };
-      } else {
-        map[key].price = (map[key].price * map[key].count + item.price) / (map[key].count + 1);
-        map[key].count++;
-        log(`[scan] Dedup: "${key}" — prijs gemiddeld over ${map[key].count} vermeldingen`);
-      }
-    }
-
-    const result = Object.values(map);
-    log(`[scan] Na deduplicatie: ${result.length} unieke producten`);
+    // Dedup: laatste factuurprijs wint (F-08) — gedeelde pure functie, geen middeling meer.
+    const result = dedupLaatstePrijs(allItems);
+    log(`[scan] Na deduplicatie: ${result.length} unieke producten (laatste prijs wint)`);
     // Side-channel: nieuwe food-leverancier kandidaten (verandert return-type niet)
     this.nieuweLeveranciers = Object.values(nieuweLeveranciers);
     if (this.nieuweLeveranciers.length) log(`[scan] ${this.nieuweLeveranciers.length} mogelijke nieuwe food-leverancier(s)`);
@@ -501,3 +509,4 @@ module.exports.schrijfNieuweLeverancierMeldingen = schrijfNieuweLeverancierMeldi
 module.exports.aggregeerFacturen = aggregeerFacturen;
 module.exports.trustAllMailboxen = trustAllMailboxen;
 module.exports.isTrustAllMailbox = isTrustAllMailbox;
+module.exports.dedupLaatstePrijs = dedupLaatstePrijs;
