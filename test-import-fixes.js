@@ -92,4 +92,27 @@ function ok(naam) { n++; console.log('  ✓', naam); }
   ok('[F-03] prijsPoortBesluit: drempel, daling, rand, eerste-prijs-pariteit');
 }
 
+// ── Trust-all mailbox: pakbon@europa.rest slaat de afzender-whitelist over ──────
+// pakbon@europa.rest is een gecureerde dropbox; élke afzender daarin is een echte leverancier.
+// Zonder trust-all vielen pakbonnen van niet-gewhiteliste afzenders (Fix Fisch via "Leon van
+// der Plas", de Sligro-emballagebon) stil weg terwijl de mailbox wél elke dag gescand wordt.
+{
+  const { isTrustAllMailbox, trustAllMailboxen } = require('./src/imap-scanner');
+
+  // Default (geen env): alleen pakbon@europa.rest is trust-all.
+  assert.strictEqual(isTrustAllMailbox('pakbon@europa.rest', undefined), true, 'pakbon@ hoort trust-all');
+  assert.strictEqual(isTrustAllMailbox('PAKBON@Europa.REST', undefined), true, 'hoofdletter-ongevoelig');
+  assert.strictEqual(isTrustAllMailbox('facturen@europa.rest', undefined), false, 'facturen@europa.rest houdt de whitelist');
+  assert.strictEqual(isTrustAllMailbox('facturen@europizza.rest', undefined), false, 'bedrijfs-inbox houdt de whitelist');
+  assert.strictEqual(isTrustAllMailbox('', undefined), false, 'lege afzender is niet trust-all');
+
+  // Env-override: meerdere mailboxen, komma-gescheiden.
+  assert.strictEqual(isTrustAllMailbox('inkoop@europa.rest', 'pakbon@europa.rest, inkoop@europa.rest'), true, 'env-override voegt toe');
+  assert.strictEqual(isTrustAllMailbox('pakbon@europa.rest', 'inkoop@europa.rest'), false, 'env-override vervangt de default');
+  // Leeg env = géén trust-all mailbox (bewuste uitschakeling).
+  assert.strictEqual(trustAllMailboxen('').length, 0, 'lege env ⇒ geen trust-all mailbox');
+  assert.strictEqual(isTrustAllMailbox('pakbon@europa.rest', ''), false, 'lege env schakelt trust-all uit');
+  ok('[trust-all] pakbon@europa.rest slaat whitelist over; overige mailboxen niet');
+}
+
 console.log(`\n${n} tests geslaagd ✅`);

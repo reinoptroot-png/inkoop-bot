@@ -79,6 +79,17 @@ function leverancierFromEmail(address, knownSenders) {
   return (domain && knownSenders[domain]) || '';
 }
 
+// Trust-all mailboxen: gecureerde leverancier-dropboxen waar de afzender-whitelist niet geldt.
+// Default: pakbon@europa.rest. Overschrijfbaar via TRUSTALL_MAILBOXES (komma-gescheiden);
+// leeg gezet ('') = geen enkele trust-all mailbox. Puur → testbaar (test-import-fixes.js).
+function trustAllMailboxen(env = process.env.TRUSTALL_MAILBOXES) {
+  const bron = env == null ? 'pakbon@europa.rest' : env;
+  return String(bron).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+function isTrustAllMailbox(imapUser, env) {
+  return trustAllMailboxen(env).includes(String(imapUser || '').toLowerCase());
+}
+
 // ── Detectie van nieuwe FOOD-leveranciers ────────────────────────────────────
 const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
 const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
@@ -363,6 +374,13 @@ ${text.substring(0, 24000)}`;
     const log = debug ? (...a) => console.log(...a) : () => {};
     const knownSenders = await loadKnownSenders(this.settings);
     log(`[scan] ${Object.keys(knownSenders).length} bekende afzenders geladen`);
+    // Trust-all mailbox (bv. pakbon@europa.rest): een gecureerde leverancier-dropbox waar élke
+    // afzender een echte leverancier is. Daar vervalt de afzender-whitelist — anders vielen
+    // pakbonnen van niet-gewhiteliste afzenders (Fix Fisch via "Leon van der Plas", de Sligro-
+    // emballagebon) stil weg. De leverancier komt dan uit het document zelf; de non-food/drank-
+    // blacklist, parser-validatie en sanity-poort blijven de troep-filters.
+    const trustAll = isTrustAllMailbox(this.settings.imapUser);
+    if (trustAll) log(`[scan] trust-all mailbox "${this.settings.imapUser}" — elke PDF wordt verwerkt, leverancier uit het document`);
     const emails = await this.fetchEmails({ markSeen, lookbackDays, reprocess, debug });
     // Al verwerkte mails overslaan (tenzij --reprocess). Bespaart Claude-calls én
     // vangt mails die je elders al opende (gelezen-vlag doet er niet meer toe).
@@ -401,7 +419,9 @@ ${text.substring(0, 24000)}`;
       // Strikte whitelist: negeer producten van afzenders die niet in Supabase staan.
       // Wél detecteren: lijkt het op een nieuwe food-leverancier? → kandidaat-melding.
       const leverancier = leverancierFromEmail(senderAddress, knownSenders);
-      if (!leverancier) {
+      // Trust-all mailbox slaat de whitelist-poort over: onbekende afzender ⇒ tóch verwerken
+      // (leverancier komt straks uit het document via `leverancier || i.leverancier`).
+      if (!leverancier && !trustAll) {
         if (lijktFoodLeverancier(email)) {
           const e = senderAddress.toLowerCase();
           if (!nieuweLeveranciers[e]) nieuweLeveranciers[e] = { email: e, naam: afzenderNaam(email) };
@@ -415,7 +435,7 @@ ${text.substring(0, 24000)}`;
         log(`[scan] Overgeslagen — geen bijlagen: "${subject}" van ${senderAddress}`);
         continue;
       }
-      log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier}"`);
+      log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier || '(uit document)'}"`);
       let emailProducten = 0;
       let emailFout = false;   // F-01: één mislukte bijlage-parse houdt de mail retrybaar
       for (const att of email.attachments) {
@@ -479,3 +499,5 @@ module.exports.lijktFoodLeverancier = lijktFoodLeverancier;
 module.exports.afzenderNaam = afzenderNaam;
 module.exports.schrijfNieuweLeverancierMeldingen = schrijfNieuweLeverancierMeldingen;
 module.exports.aggregeerFacturen = aggregeerFacturen;
+module.exports.trustAllMailboxen = trustAllMailboxen;
+module.exports.isTrustAllMailbox = isTrustAllMailbox;
