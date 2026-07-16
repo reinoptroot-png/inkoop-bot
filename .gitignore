@@ -7,3 +7,4 @@ settings.json
 dist/
 out/
 .next/
+wachter-state.json
