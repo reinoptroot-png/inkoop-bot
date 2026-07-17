@@ -108,6 +108,22 @@ function dedupLaatstePrijs(items) {
   return Object.values(map);
 }
 
+// Claude-fout die het waard is om opnieuw te proberen: rate limit (429), overbelast (529),
+// serverfout (5xx) of het bijbehorende error.type. Een 4xx als 400 (invalid_request) is
+// persistent → niet opnieuw proberen. Puur → testbaar.
+function isTransienteFout(httpStatus, errorType) {
+  if (httpStatus === 429 || httpStatus === 529 || (httpStatus >= 500 && httpStatus <= 599)) return true;
+  return ['rate_limit_error', 'overloaded_error', 'api_error'].includes(errorType || '');
+}
+// Wachttijd vóór de volgende poging: respecteer de Retry-After-header (seconden), anders
+// exponentieel (2^poging s) met een plafond zodat we niet door de mailbox-timeout heen lopen.
+function backoffMs(poging, retryAfter) {
+  const ra = parseInt(retryAfter, 10);
+  if (Number.isFinite(ra) && ra > 0) return Math.min(ra * 1000, 30000);
+  return Math.min(2 ** poging * 1000, 20000);
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 // ── Detectie van nieuwe FOOD-leveranciers ────────────────────────────────────
 const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
 const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
@@ -349,43 +365,74 @@ Regels:
 Factuur tekst:
 ${text.substring(0, 24000)}`;
 
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.settings.anthropicKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-opus-4-5',
-          max_tokens: 16000, // 8000 kapte lange facturen (>~40 regels) halverwege af; 16000 blijft onder de non-streaming HTTP-timeout
-          messages: [{ role: 'user', content: prompt }]
-        })
-      });
-
-      const data = await response.json();
-      if (data.error) {
-        // F-01: API-storing is retrybaar — mail NIET markeren, volgende run opnieuw.
-        log(`[pdf] Claude API fout: ${data.error.message}`);
+    const body = JSON.stringify({
+      model: 'claude-opus-4-5',
+      max_tokens: 16000, // 8000 kapte lange facturen (>~40 regels) halverwege af; 16000 blijft onder de non-streaming HTTP-timeout
+      messages: [{ role: 'user', content: prompt }],
+    });
+    // Bounded retry-met-backoff op transiente fouten (rate limit/overbelast/serverfout). Zonder dit
+    // faalde bij een backlog-catch-up (tientallen PDF's snel achter elkaar) het merendeel op 429 en
+    // bleven de pakbonnen — dankzij F-01 wél retrybaar — steken tot een volgende run. Fouten gaan
+    // via console.warn (niet het onderdrukte log()) zodat de reden altijd zichtbaar is.
+    const MAX_POGINGEN = 3;
+    for (let poging = 1; poging <= MAX_POGINGEN; poging++) {
+      try {
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.settings.anthropicKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body,
+        });
+        if (isTransienteFout(response.status)) {
+          if (poging < MAX_POGINGEN) {
+            const wacht = backoffMs(poging, response.headers.get('retry-after'));
+            console.warn(`[pdf] Claude ${response.status} (rate limit/overbelast) voor "${filename}" — poging ${poging}/${MAX_POGINGEN}, ${Math.round(wacht / 1000)}s wachten`);
+            await sleep(wacht);
+            continue;
+          }
+          console.warn(`[pdf] Claude bleef ${response.status} geven voor "${filename}" na ${MAX_POGINGEN} pogingen — mail blijft retrybaar`);
+          return { ok: false, items: [] };
+        }
+        const data = await response.json();
+        if (data.error) {
+          // F-01: API-storing is retrybaar — mail NIET markeren. Transient? even wachten en opnieuw.
+          if (isTransienteFout(null, data.error.type) && poging < MAX_POGINGEN) {
+            const wacht = backoffMs(poging, null);
+            console.warn(`[pdf] Claude ${data.error.type} voor "${filename}" — poging ${poging}/${MAX_POGINGEN}, ${Math.round(wacht / 1000)}s wachten`);
+            await sleep(wacht);
+            continue;
+          }
+          console.warn(`[pdf] Claude API fout (${filename}): ${data.error.message} — mail blijft retrybaar`);
+          return { ok: false, items: [] };
+        }
+        // F-01: fout ≠ leeg — afgekapte JSON of niet-array is ok:false (retry), een geldige
+        // lege lijst is ok:true. Pure verwerking + validatie in src/factuur-parse.js (getest).
+        const parse = verwerkClaudeTekst(data.content?.[0]?.text || '');
+        if (!parse.ok) {
+          console.warn(`[pdf] ${parse.fout} voor "${filename}" — mail blijft retrybaar`);
+          return parse;
+        }
+        if (parse.overgeslagen > 0) {
+          console.warn(`[pdf] ${parse.overgeslagen} items overgeslagen wegens ontbrekende velden in "${filename}"`);
+        }
+        log(`[pdf] Claude extraheerde ${parse.items.length} geldige producten uit "${filename}"`);
+        return parse;
+      } catch (e) {
+        // Netwerkfout is ook transient.
+        if (poging < MAX_POGINGEN) {
+          const wacht = backoffMs(poging, null);
+          console.warn(`[pdf] netwerkfout voor "${filename}" (${e.message}) — poging ${poging}/${MAX_POGINGEN}, ${Math.round(wacht / 1000)}s wachten`);
+          await sleep(wacht);
+          continue;
+        }
+        console.warn(`[pdf] Claude onbereikbaar voor "${filename}" na ${MAX_POGINGEN} pogingen: ${e.message} — mail blijft retrybaar`);
         return { ok: false, items: [] };
       }
-      // F-01: fout ≠ leeg — afgekapte JSON of niet-array is ok:false (retry), een geldige
-      // lege lijst is ok:true. Pure verwerking + validatie in src/factuur-parse.js (getest).
-      const parse = verwerkClaudeTekst(data.content?.[0]?.text || '');
-      if (!parse.ok) {
-        console.error(`[pdf] ${parse.fout} voor "${filename}" — mail blijft retrybaar`);
-        return parse;
-      }
-      if (parse.overgeslagen > 0) {
-        console.warn(`[pdf] ${parse.overgeslagen} items overgeslagen wegens ontbrekende velden in "${filename}"`);
-      }
-      log(`[pdf] Claude extraheerde ${parse.items.length} geldige producten uit "${filename}"`);
-      return parse;
-    } catch (e) {
-      console.error(`[pdf] Claude parse error (${filename}):`, e.message);
-      return { ok: false, items: [] };
     }
+    return { ok: false, items: [] };
   }
 
   async scan({ markSeen = false, lookbackDays = 45, reprocess = false, debug = false, dryRun = false } = {}) {
@@ -510,3 +557,5 @@ module.exports.aggregeerFacturen = aggregeerFacturen;
 module.exports.trustAllMailboxen = trustAllMailboxen;
 module.exports.isTrustAllMailbox = isTrustAllMailbox;
 module.exports.dedupLaatstePrijs = dedupLaatstePrijs;
+module.exports.isTransienteFout = isTransienteFout;
+module.exports.backoffMs = backoffMs;

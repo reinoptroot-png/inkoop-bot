@@ -152,4 +152,27 @@ function ok(naam) { n++; console.log('  ✓', naam); }
   ok('[F-08] dedupLaatstePrijs: laatste factuurprijs wint, geen middeling/leverancier-merge');
 }
 
+// ── Retry-op-rate-limit: transiente Claude-fouten worden opnieuw geprobeerd ──────
+// Zonder retry faalde de backlog-catch-up massaal op 429 (rate limit). isTransienteFout bepaalt
+// wat herhaalbaar is; backoffMs de wachttijd (Retry-After eerst, anders exponentieel met plafond).
+{
+  const { isTransienteFout, backoffMs } = require('./src/imap-scanner');
+
+  assert.strictEqual(isTransienteFout(429), true, '429 rate limit is transient');
+  assert.strictEqual(isTransienteFout(529), true, '529 overbelast is transient');
+  assert.strictEqual(isTransienteFout(503), true, '5xx serverfout is transient');
+  assert.strictEqual(isTransienteFout(200), false, '200 is niet transient');
+  assert.strictEqual(isTransienteFout(400), false, '400 invalid_request is persistent, niet opnieuw');
+  assert.strictEqual(isTransienteFout(null, 'overloaded_error'), true, 'overloaded_error is transient');
+  assert.strictEqual(isTransienteFout(null, 'rate_limit_error'), true, 'rate_limit_error is transient');
+  assert.strictEqual(isTransienteFout(null, 'invalid_request_error'), false, 'invalid_request is persistent');
+
+  assert.strictEqual(backoffMs(1, null), 2000, 'exponentieel: poging 1 → 2s');
+  assert.strictEqual(backoffMs(3, null), 8000, 'exponentieel: poging 3 → 8s');
+  assert.strictEqual(backoffMs(9, null), 20000, 'exponentieel met plafond 20s');
+  assert.strictEqual(backoffMs(1, '15'), 15000, 'Retry-After (15s) wint');
+  assert.strictEqual(backoffMs(1, '120'), 30000, 'Retry-After met plafond 30s');
+  ok('[retry] isTransienteFout + backoffMs: rate limit/overbelast opnieuw, met Retry-After');
+}
+
 console.log(`\n${n} tests geslaagd ✅`);
