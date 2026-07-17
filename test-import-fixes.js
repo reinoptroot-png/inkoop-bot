@@ -175,4 +175,14 @@ function ok(naam) { n++; console.log('  ✓', naam); }
   ok('[retry] isTransienteFout + backoffMs: rate limit/overbelast opnieuw, met Retry-After');
 }
 
+// ── Leverancier-fallback voor trust-all pakbonnen (afzender niet gewhitelist) ────
+{
+  const { leverancierUitContext } = require('./src/imap-scanner');
+  assert.strictEqual(leverancierUitContext('Uw pakbon van Fix Fisch BV', 'Leon van der Plas'), 'Fix Fisch', 'onderwerp "van X BV" → X');
+  assert.strictEqual(leverancierUitContext('Pakbon van Sligro B.V.', 'noreply'), 'Sligro', 'B.V.-suffix eraf');
+  assert.strictEqual(leverancierUitContext('Sligro leveringsinformatie', 'Sligro Automatische Mail'), 'Sligro Automatische Mail', 'geen "van" → afzendernaam');
+  assert.strictEqual(leverancierUitContext('', 'Fixfisch'), 'Fixfisch', 'leeg onderwerp → afzendernaam');
+  ok('[leverancier-fallback] leidt bron af uit onderwerp/afzender voor trust-all pakbonnen');
+}
+
 console.log(`\n${n} tests geslaagd ✅`);

@@ -124,6 +124,15 @@ function backoffMs(poging, retryAfter) {
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Leverancier afleiden uit de mailcontext als noch de whitelist noch het document er een geeft
+// (trust-all pakbonnen). Onderwerp "Uw pakbon van Fix Fisch BV" → "Fix Fisch"; anders de
+// afzendernaam. Zo krijgt elke rij/melding een herkenbare bron i.p.v. leeg. Puur → testbaar.
+function leverancierUitContext(subject, afzenderNaamStr) {
+  const m = (subject || '').match(/\bvan\s+(.+?)(?:\s+b\.?\s?v\.?)?\s*$/i);
+  if (m && m[1].trim().length >= 3) return m[1].trim();
+  return (afzenderNaamStr || '').trim();
+}
+
 // ── Detectie van nieuwe FOOD-leveranciers ────────────────────────────────────
 const INVOICE_RE = /factuur|faktuur|pakbon|invoice|bestelbon|leverbon|vrachtbrief/i;
 const SKIP_SUBJECT_RE = /aanmaning|herinnering|betalingsherinnering|offerte|typefout/i;
@@ -355,6 +364,7 @@ Regels:
 - "price": de prijs per eenheid (per kg, per liter, per stuk), als getal, ALTIJD EXCL. BTW (netto). Toont de factuur alleen bruto regelprijzen (incl. btw), reken terug naar excl. (voedsel 9%, non-food 21%); kan dat niet betrouwbaar, sla het product dan over.
 - "eenheid": de eenheid (kg, liter, stuk, etc.)
 - Als de prijs per doos/krat is, bereken dan de prijs per kg/stuk als dat mogelijk is
+- Bevat een regel een AANTAL stuks (bv. "24 stuks", "25 stuks", "doos 48") en is het bedrag voor de hele verpakking, geef dan ALTIJD de prijs PER ÉÉN stuk (bedrag ÷ aantal), met eenheid "stuk". Wees hierin consistent: nooit de verpakkingsprijs als stuksprijs opgeven. Zet het aantal niet in de "ingredient"-naam.
 - "regelbedrag": het TOTALE bedrag van die factuurregel zoals op de factuur staat (aantal × stukprijs, excl. btw indien de factuur netto regelbedragen toont), als getal. Null als je het niet kunt bepalen.
 - Sla producten over waarbij je de eenheidsprijs niet kunt bepalen
 - Vul de EXTRA velden (artikelnummer, barcode, omschrijving, gewicht, verpakking, btw, factuurnummer, ordernummer, herkomst/land van herkomst, kwaliteitsklasse, temperatuur, min_bestelling) ALLEEN in als ze daadwerkelijk op de factuur staan; laat een veld weg of zet het op null als het er niet staat. Verzin niets.
@@ -501,6 +511,11 @@ ${text.substring(0, 24000)}`;
         continue;
       }
       log(`[scan] Verwerken: "${subject}" van ${senderAddress} → leverancier="${leverancier || '(uit document)'}"`);
+      // Trust-all pakbonnen komen van niet-gewhiteliste afzenders, dus `leverancier` is hier leeg;
+      // valt Claude's document-leverancier ook weg, dan leidt deze fallback 'm uit het onderwerp af
+      // ("Uw pakbon van Fix Fisch BV" → "Fix Fisch") of de afzendernaam — zodat elke rij/melding
+      // tóch een herkenbare leverancier krijgt i.p.v. leeg.
+      const leverancierFallback = leverancierUitContext(subject, afzenderNaam(email));
       let emailProducten = 0;
       let emailFout = false;   // F-01: één mislukte bijlage-parse houdt de mail retrybaar
       for (const att of email.attachments) {
@@ -513,11 +528,11 @@ ${text.substring(0, 24000)}`;
         const items = parse.items;
         log(`[scan] "${att.filename}" → ${items.length} producten gevonden${parse.ok ? '' : ' (PARSE-FOUT — retry volgende run)'}`);
         emailProducten += items.length;
-        allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || '', leverancier_email: senderAddress })));
+        allItems.push(...items.map(i => ({ ...i, leverancier: leverancier || i.leverancier || leverancierFallback, leverancier_email: senderAddress })));
         // Factuurregels apart bewaren (vóór dedup) voor de factuurtotalen
         for (const i of items) factuurRegels.push({
           factuurnummer: i.factuurnummer, regelbedrag: i.regelbedrag, factuurtotaal: i.factuurtotaal,
-          factuurdatum: i.factuurdatum, leverancier: leverancier || i.leverancier || '', emailDatum: ymdDate(email.date),
+          factuurdatum: i.factuurdatum, leverancier: leverancier || i.leverancier || leverancierFallback, emailDatum: ymdDate(email.date),
         });
       }
       // Mail als verwerkt vastleggen — volgende run slaat 'm over (geen dubbele Claude-calls).
@@ -559,3 +574,4 @@ module.exports.isTrustAllMailbox = isTrustAllMailbox;
 module.exports.dedupLaatstePrijs = dedupLaatstePrijs;
 module.exports.isTransienteFout = isTransienteFout;
 module.exports.backoffMs = backoffMs;
+module.exports.leverancierUitContext = leverancierUitContext;
